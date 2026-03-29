@@ -79,9 +79,43 @@ Anthropic runs periodic promotions (e.g., March 2026: 2x usage during off-peak h
 - How promos are announced — no API; support articles + UI changes are the signals
 - Whether `/status` command gives usable remaining-quota data
 
+### Window capacity variance
+
+Windows may not be uniform. Known sources of variance:
+- **Peak-hour reduction** (March 2026): 5am-11am PT weekdays reportedly get reduced session caps, off-peak gets more. Not yet empirically validated.
+- **Promos**: Can double off-peak capacity (March 2026 promo did this).
+- **Unknown**: Whether weekend windows differ from weekday, whether model choice affects window size differently than token count suggests.
+
+Burn point math must account for heterogeneous windows: sum of remaining individual window capacities, not `count * uniform_cap`.
+
+### Calibration (Phase 0 — active now)
+
+Before scheduling, we need empirical data on actual window capacities. Capture these data points per window:
+
+| Field | Source |
+|-------|--------|
+| `window_start` | First message timestamp from JSONL |
+| `window_end` | `window_start + 5h` |
+| `tokens_consumed` | ccusage blocks data |
+| `throttled` | Boolean — did you hit the cap? |
+| `throttle_timestamp` | When throttling started (if applicable) |
+| `peak_hour` | Boolean — was window start during 5am-11am PT weekdays? |
+| `promo_active` | Boolean — was a promo running? |
+| `weekly_pct_before` | Weekly % used from desktop app (screenshot at window start) |
+| `weekly_pct_after` | Weekly % used from desktop app (screenshot at window end/throttle) |
+| `model_mix` | Which models used (Opus/Sonnet/Haiku split) |
+
+Store in `calibration-log.jsonl`. Capture opportunistically — screenshot the usage pane when starting and ending heavy sessions, note whether you got throttled. A few weeks of data points will reveal whether windows are uniform and what the actual budgets are.
+
+Key calibration targets:
+- **Weekly budget estimate**: `total_tokens / weekly_pct_used` (need 3-5 data points)
+- **Per-window cap**: tokens at throttle point (need to actually hit a cap)
+- **Peak vs off-peak ratio**: compare same-model sessions at different times
+
 ## Build order
 
-1. **Statusline** — integrate ccusage into existing statusline. Immediate daily value, no scheduler needed.
+0. **Calibration data collection** — Start capturing window data points now. No code needed yet, just a JSONL file and discipline about screenshots. ACTIVE.
+1. **Statusline** — integrate ccusage into existing statusline. DONE — block cost + time remaining added.
 2. **Post-session hook** — token summary at wrap time. Builds intuition.
 3. **Historical heatmap** — which projects, which times. Informs whether scheduler is even needed or just shifting habits is enough.
 4. **Queue + scheduler** — the full system. Only build if 1-3 confirm the value.
