@@ -107,6 +107,14 @@ Before scheduling, we need empirical data on actual window capacities. Capture t
 
 Store in `calibration-log.jsonl`. Capture opportunistically — screenshot the usage pane when starting and ending heavy sessions, note whether you got throttled. A few weeks of data points will reveal whether windows are uniform and what the actual budgets are.
 
+### Window chaining strategy
+
+Windows are rolling — starts on first message after previous expires. Dead gaps between windows waste both capacity and calibration opportunities. Strategy: chain windows by firing the next deferrable task as soon as the previous window expires. Every window produces a data point, every gap gets used.
+
+Don't open windows with pings — open them with real work. The queue should always have something deferrable in it. Cron detects window expiry, fires next queued task, new window opens with productive work.
+
+Timing consideration: don't open a window 5 hours before you need interactive use. If you'll sit down at 8am, a window opened at 3am expires at 8am — forcing you to open a new one immediately. Better: fire deferrable work at 3am (window 3am-8am), let it expire, then your 8am interactive session gets a fresh full window.
+
 Key calibration targets:
 - **Weekly budget estimate**: `total_tokens / weekly_pct_used` (need 3-5 data points)
 - **Per-window cap**: tokens at throttle point (need to actually hit a cap)
