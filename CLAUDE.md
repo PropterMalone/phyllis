@@ -24,7 +24,7 @@ Heavy sessions (NineAngel runs, 3CB resolution, JeffWolf A/B batteries) can exha
 
 ### Existing tools (don't rebuild)
 
-- **`ccusage`** (`npx ccusage@latest`) — Parses `~/.claude/projects/*/*.jsonl`, shows token usage by day/week/month. Has a statusline mode (`bun x ccusage statusline`). Anthropic staff endorsed as official workaround.
+- **`ccusage`** (`npx ccusage@latest`) — Community tool. Parses `~/.claude/projects/*/*.jsonl`, shows token usage by day/week/month. Has a statusline mode (`bun x ccusage statusline`). Active project (800+ issues).
 - Community tools: `claude-code-limit-tracker`, `Claude-Code-Usage-Monitor`
 
 ### Phyllis's unique value: scheduling + awareness
