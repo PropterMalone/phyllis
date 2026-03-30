@@ -126,11 +126,11 @@ Key calibration targets:
 
 ## Build order
 
-0. **Calibration data collection** — DONE. Harvester auto-collects from ccusage. 96 data points (93 backfilled + 3 manual).
+0. **Calibration data collection** — DONE. Harvester auto-collects from ccusage. 96+ data points.
 1. **Statusline** — DONE. Block cost + time remaining in statusline.
-2. **Post-session hook** — DONE. `SessionEnd` hook runs `phyllis snapshot` automatically. Wrap skill step 6 updated to use it too.
-3. **Historical heatmap** — which projects, which times. Informs whether scheduler is even needed or just shifting habits is enough.
-4. **Queue + scheduler** — the full system. Only build if 1-3 confirm the value.
+2. **Post-session hook** — DONE. `SessionEnd` hook runs `phyllis snapshot` automatically.
+3. **Historical heatmap** — DONE. Day×hour heatmap + project breakdown + weekly summary.
+4. **Queue + scheduler** — DONE. Task queue with t-shirt sizes, scheduler with peak/interactive-hour awareness, runner via `claude -p`.
 
 ## Tech stack
 
@@ -140,24 +140,33 @@ TypeScript + Node.js, CLI-first. No hosting (runs on Malone). ccusage as depende
 
 - `npm run harvest` — Process completed ccusage blocks into calibration entries
 - `npm run snapshot` — Capture active block with projection data
+- `npm run analyze` — Usage heatmap + project breakdown
 - `npm run validate` — biome check + typecheck + test
 - `npm run build` — tsc
 
-CLI: `node --import tsx src/cli.ts <harvest|snapshot> [--user <id>] [--log <path>] [--dry-run]`
+CLI: `node --import tsx src/cli.ts <command> [options]`
+- `harvest|snapshot` — data collection (`--user`, `--log`, `--dry-run`)
+- `analyze` — heatmap + project table (`--log`, `--metric tokens|cost`)
+- `weekly` — weekly burn rate summary (`--log`)
+- `queue list|add` — manage deferrable tasks (`--queue`, `--name`, `--size`, `--prompt`, `--dir`, `--priority`)
+- `run` — check window + execute next task (`--queue`, `--dry-run`)
 
 ## File structure
 
 ```
 src/
-  types.ts          — CcusageBlock, CalibrationEntry, PromoRange types
-  derive.ts         — Pure functions: blockToEntry, isPeakHour, isPromoActive
-  derive.test.ts
+  types.ts          — CcusageBlock, CalibrationEntry, UserProfile, QueuedTask
+  derive.ts         — Pure: blockToEntry, isPeakHour, isPromoActive, output_ratio, cache_hit_rate
   ccusage.ts        — Shell out to ccusage, parse JSON, injectable executor
-  ccusage.test.ts
   dedup.ts          — Read existing log, filter novel entries (key: user_id:window_start)
-  dedup.test.ts
   harvest.ts        — Orchestrator: harvest (completed blocks) + snapshot (active block)
-  harvest.test.ts
-  cli.ts            — CLI entrypoint
+  analyze.ts        — Heatmap builder + project breakdown from ccusage sessions
+  weekly.ts         — Weekly summary with burn rate trends
+  queue.ts          — Task queue CRUD (flat JSON file)
+  scheduler.ts      — Pure decision logic: should we schedule now?
+  runner.ts         — Orchestrates queue + scheduler + claude -p execution
+  cli.ts            — CLI entrypoint for all commands
+  *.test.ts         — Co-located tests (75 total)
 calibration-log.jsonl — Accumulated calibration data (multi-user ready)
+queue.json          — Deferrable task queue (created on first `queue add`)
 ```
