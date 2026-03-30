@@ -11,7 +11,9 @@ import {
 	renderProjectTable,
 } from "./analyze.ts";
 import { harvest, snapshot } from "./harvest.ts";
-import type { CalibrationEntry } from "./types.ts";
+import { addTask, listTasks } from "./queue.ts";
+import { run } from "./runner.ts";
+import type { CalibrationEntry, TaskSize } from "./types.ts";
 import { buildWeeklySummary, renderWeeklySummary } from "./weekly.ts";
 
 const DEFAULT_LOG_PATH = resolve(process.cwd(), "calibration-log.jsonl");
@@ -24,12 +26,17 @@ Usage:
   phyllis snapshot [--user <id>] [--log <path>] [--dry-run]
   phyllis analyze [--log <path>] [--metric <tokens|cost>]
   phyllis weekly [--log <path>]
+  phyllis queue list [--queue <path>]
+  phyllis queue add --name <n> --size <S|M|L|XL> --prompt <p> --dir <d> [--priority <n>]
+  phyllis run [--queue <path>] [--dry-run]
 
 Commands:
   harvest   Process completed blocks into calibration entries
   snapshot  Capture the active block with projection data
   analyze   Show usage heatmap and project breakdown
   weekly    Show weekly summary with burn rate trends
+  queue     Manage deferrable task queue
+  run       Check window state and execute next queued task
 
 Options:
   --user <id>          User identifier (default: $USER or "unknown")
@@ -39,42 +46,71 @@ Options:
 	process.exit(1);
 }
 
-type Command = "harvest" | "snapshot" | "analyze" | "weekly";
+type Command = "harvest" | "snapshot" | "analyze" | "weekly" | "queue" | "run";
+
+const DEFAULT_QUEUE_PATH = resolve(process.cwd(), "queue.json");
 
 interface ParsedArgs {
 	command: Command;
 	userId: string;
 	logPath: string;
+	queuePath: string;
 	dryRun: boolean;
 	metric: "tokens" | "cost";
+	// queue add fields
+	taskName?: string;
+	taskSize?: TaskSize;
+	taskPrompt?: string;
+	taskDir?: string;
+	taskPriority?: number;
+	subcommand?: string;
 }
+
+const VALID_COMMANDS = new Set([
+	"harvest",
+	"snapshot",
+	"analyze",
+	"weekly",
+	"queue",
+	"run",
+]);
 
 function parseArgs(argv: string[]): ParsedArgs {
 	const args = argv.slice(2);
 	const command = args[0] as string;
-	if (
-		command !== "harvest" &&
-		command !== "snapshot" &&
-		command !== "analyze" &&
-		command !== "weekly"
-	) {
+	if (!VALID_COMMANDS.has(command)) {
 		usage();
 	}
 
 	let userId = process.env.USER ?? "unknown";
 	let logPath = DEFAULT_LOG_PATH;
+	let queuePath = DEFAULT_QUEUE_PATH;
 	let dryRun = false;
 	let metric: "tokens" | "cost" = "cost";
+	let subcommand: string | undefined;
+	let taskName: string | undefined;
+	let taskSize: TaskSize | undefined;
+	let taskPrompt: string | undefined;
+	let taskDir: string | undefined;
+	let taskPriority: number | undefined;
 
-	for (let i = 1; i < args.length; i++) {
+	// For "queue", first positional after command is the subcommand
+	let startIdx = 1;
+	if (command === "queue" && args[1] && !args[1].startsWith("--")) {
+		subcommand = args[1];
+		startIdx = 2;
+	}
+
+	for (let i = startIdx; i < args.length; i++) {
 		switch (args[i]) {
 			case "--user":
 				userId = args[++i];
-				if (!userId) usage();
 				break;
 			case "--log":
 				logPath = resolve(args[++i]);
-				if (!logPath) usage();
+				break;
+			case "--queue":
+				queuePath = resolve(args[++i]);
 				break;
 			case "--dry-run":
 				dryRun = true;
@@ -85,13 +121,41 @@ function parseArgs(argv: string[]): ParsedArgs {
 				metric = m;
 				break;
 			}
+			case "--name":
+				taskName = args[++i];
+				break;
+			case "--size":
+				taskSize = args[++i] as TaskSize;
+				break;
+			case "--prompt":
+				taskPrompt = args[++i];
+				break;
+			case "--dir":
+				taskDir = args[++i];
+				break;
+			case "--priority":
+				taskPriority = Number(args[++i]);
+				break;
 			default:
 				console.error(`unknown option: ${args[i]}`);
 				usage();
 		}
 	}
 
-	return { command: command as Command, userId, logPath, dryRun, metric };
+	return {
+		command: command as Command,
+		userId,
+		logPath,
+		queuePath,
+		dryRun,
+		metric,
+		subcommand,
+		taskName,
+		taskSize,
+		taskPrompt,
+		taskDir,
+		taskPriority,
+	};
 }
 
 async function readCalibrationLog(
@@ -184,6 +248,71 @@ async function runWeekly(parsed: ParsedArgs): Promise<void> {
 	console.log(renderWeeklySummary(weeks));
 }
 
+async function runQueue(parsed: ParsedArgs): Promise<void> {
+	const { queuePath, subcommand } = parsed;
+
+	if (subcommand === "list" || !subcommand) {
+		const tasks = await listTasks(queuePath);
+		if (tasks.length === 0) {
+			console.log("queue is empty");
+			return;
+		}
+		console.log(`\n  Task Queue (${tasks.length} tasks)\n`);
+		for (const t of tasks) {
+			const status =
+				t.status === "queued"
+					? " "
+					: t.status === "running"
+						? "▶"
+						: t.status === "done"
+							? "✓"
+							: "✗";
+			console.log(
+				`  [${status}] ${t.name} (${t.size}, p${t.priority}) — ${t.status}`,
+			);
+		}
+		return;
+	}
+
+	if (subcommand === "add") {
+		const { taskName, taskSize, taskPrompt, taskDir, taskPriority } = parsed;
+		if (!taskName || !taskSize || !taskPrompt || !taskDir) {
+			console.error("queue add requires --name, --size, --prompt, and --dir");
+			process.exit(1);
+		}
+		const task = await addTask(queuePath, {
+			name: taskName,
+			description: taskName,
+			size: taskSize,
+			prompt: taskPrompt,
+			project_dir: taskDir,
+			priority: taskPriority ?? 10,
+		});
+		console.log(`added task: ${task.name} (${task.id})`);
+		return;
+	}
+
+	console.error(`unknown queue subcommand: ${subcommand}`);
+	usage();
+}
+
+async function runScheduler(parsed: ParsedArgs): Promise<void> {
+	const result = await run({
+		queuePath: parsed.queuePath,
+		logPath: parsed.logPath,
+		dryRun: parsed.dryRun,
+	});
+
+	const prefix = result.dryRun ? "[dry-run] " : "";
+	if (result.taskName) {
+		console.log(
+			`${prefix}${result.decision}: ${result.taskName} — ${result.reason}`,
+		);
+	} else {
+		console.log(`${prefix}${result.decision}: ${result.reason}`);
+	}
+}
+
 async function main(): Promise<void> {
 	const parsed = parseArgs(process.argv);
 
@@ -193,6 +322,12 @@ async function main(): Promise<void> {
 			break;
 		case "weekly":
 			await runWeekly(parsed);
+			break;
+		case "queue":
+			await runQueue(parsed);
+			break;
+		case "run":
+			await runScheduler(parsed);
 			break;
 		default:
 			await runHarvestOrSnapshot(parsed);
