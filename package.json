@@ -9,6 +9,7 @@
 	"scripts": {
 		"harvest": "node --import tsx src/cli.ts harvest",
 		"snapshot": "node --import tsx src/cli.ts snapshot",
+		"analyze": "node --import tsx src/cli.ts analyze",
 		"build": "tsc",
 		"format": "biome format --write .",
 		"lint": "biome check --write .",
