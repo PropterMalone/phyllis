@@ -1,0 +1,29 @@
+{
+	"name": "phyllis",
+	"version": "0.1.0",
+	"description": "Claude Code usage optimizer — scheduling + awareness for subscription rate limits",
+	"type": "module",
+	"bin": {
+		"phyllis": "dist/cli.js"
+	},
+	"scripts": {
+		"harvest": "node --import tsx src/cli.ts harvest",
+		"snapshot": "node --import tsx src/cli.ts snapshot",
+		"build": "tsc",
+		"format": "biome format --write .",
+		"lint": "biome check --write .",
+		"typecheck": "tsc --noEmit",
+		"test": "vitest run",
+		"validate": "biome check . && tsc --noEmit && vitest run"
+	},
+	"keywords": [],
+	"author": "",
+	"license": "ISC",
+	"devDependencies": {
+		"@biomejs/biome": "^2.4.10",
+		"@types/node": "^25.5.0",
+		"tsx": "^4.21.0",
+		"typescript": "^6.0.2",
+		"vitest": "^4.1.2"
+	}
+}

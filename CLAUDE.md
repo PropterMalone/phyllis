@@ -49,6 +49,10 @@ Heavy sessions (NineAngel runs, 3CB resolution, JeffWolf A/B batteries) can exha
 
 6. **Burn point detection** — Calculate whether remaining weekly budget exceeds what can physically be consumed in the remaining windows before weekly reset. Formula: `burn_point = remaining_weekly_budget > (hours_until_weekly_reset / 5) * per_window_cap`. Once at the burn point, all scheduling constraints drop — fire everything immediately since you can't exhaust the weekly budget even running flat out. This is the key signal for "stop deferring, start spending." Requires empirical calibration of the weekly budget (not published by Anthropic — back into it from `total_tokens_this_week / weekly_pct_used` using the desktop app's % readout).
 
+### Deterministic step extraction
+
+Any step that can run deterministically (formatting, linting, file copying, git operations) should run outside the LLM, not burn tokens. This applies both to Phyllis's own scheduling and as a general design principle for pipelines it schedules. When queuing a task, identify which sub-steps are mechanical and run those via plain bash, reserving `claude -p` for the parts that actually need the model. (h/t @zvxg.bsky.social)
+
 ### What we skip
 
 - Token estimation engine — human tags tasks with t-shirt sizes
