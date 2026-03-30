@@ -2,7 +2,7 @@
 
 > Scheduler that puts deferrable Claude Code work into empty usage windows, with awareness of promos and peak hours.
 
-Last verified: 2026-03-29
+Last verified: 2026-03-30
 
 ## Problem
 
@@ -126,9 +126,9 @@ Key calibration targets:
 
 ## Build order
 
-0. **Calibration data collection** — Start capturing window data points now. No code needed yet, just a JSONL file and discipline about screenshots. ACTIVE.
-1. **Statusline** — integrate ccusage into existing statusline. DONE — block cost + time remaining added.
-2. **Post-session hook** — token summary at wrap time. Builds intuition.
+0. **Calibration data collection** — DONE. Harvester auto-collects from ccusage. 96 data points (93 backfilled + 3 manual).
+1. **Statusline** — DONE. Block cost + time remaining in statusline.
+2. **Post-session hook** — DONE. `SessionEnd` hook runs `phyllis snapshot` automatically. Wrap skill step 6 updated to use it too.
 3. **Historical heatmap** — which projects, which times. Informs whether scheduler is even needed or just shifting habits is enough.
 4. **Queue + scheduler** — the full system. Only build if 1-3 confirm the value.
 
@@ -138,8 +138,26 @@ TypeScript + Node.js, CLI-first. No hosting (runs on Malone). ccusage as depende
 
 ## Commands
 
-TBD
+- `npm run harvest` — Process completed ccusage blocks into calibration entries
+- `npm run snapshot` — Capture active block with projection data
+- `npm run validate` — biome check + typecheck + test
+- `npm run build` — tsc
+
+CLI: `node --import tsx src/cli.ts <harvest|snapshot> [--user <id>] [--log <path>] [--dry-run]`
 
 ## File structure
 
-TBD
+```
+src/
+  types.ts          — CcusageBlock, CalibrationEntry, PromoRange types
+  derive.ts         — Pure functions: blockToEntry, isPeakHour, isPromoActive
+  derive.test.ts
+  ccusage.ts        — Shell out to ccusage, parse JSON, injectable executor
+  ccusage.test.ts
+  dedup.ts          — Read existing log, filter novel entries (key: user_id:window_start)
+  dedup.test.ts
+  harvest.ts        — Orchestrator: harvest (completed blocks) + snapshot (active block)
+  harvest.test.ts
+  cli.ts            — CLI entrypoint
+calibration-log.jsonl — Accumulated calibration data (multi-user ready)
+```
