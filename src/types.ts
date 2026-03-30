@@ -42,12 +42,74 @@ export interface CalibrationEntry {
 	tokens_consumed: number;
 	cost_equiv: number;
 	remaining_min: number | null;
-	throttled: null; // can't detect from ccusage — always null for automated entries
+	throttled: null | boolean; // null = unknown (automated), true/false = manual observation
 	peak_hour: boolean;
 	promo_active: boolean;
 	model_mix: string[];
-	source: "ccusage-harvest" | "ccusage-snapshot";
+	source: "ccusage-harvest" | "ccusage-snapshot" | "manual";
 	notes: string;
+
+	// Compute cost signals — derived from ccusage token breakdown
+	token_breakdown?: {
+		input: number;
+		output: number;
+		cache_creation: number;
+		cache_read: number;
+	};
+	output_ratio?: number; // output / (input + output), 0-1. Higher = more expensive to serve
+	cache_hit_rate?: number; // cache_read / (cache_read + input + cache_creation), 0-1
+}
+
+// User profile — context for interpreting calibration data across users
+export interface UserProfile {
+	user_id: string;
+	plan: "free" | "pro" | "max5" | "max20" | "team" | "enterprise";
+	timezone: string; // IANA, e.g. "America/New_York"
+	extra_usage_enabled: boolean;
+	primary_model: string; // e.g. "claude-opus-4-6"
+
+	// Access method
+	primary_client:
+		| "claude-code"
+		| "claude-web"
+		| "claude-desktop"
+		| "vscode"
+		| "jetbrains"
+		| "cursor"
+		| "windsurf"
+		| "other";
+	multiple_clients: boolean; // uses >1 client against same pool
+
+	// Configuration overhead — affects token burn per interaction
+	config_overhead?: {
+		claude_md_lines: number; // total CLAUDE.md + rules file lines
+		mcp_server_count: number;
+		hook_count: number;
+	};
+
+	// Environment
+	os?: "linux" | "macos" | "windows";
+	region?: string; // rough geographic region, e.g. "us-east", "eu-west"
+
+	notes?: string;
+}
+
+// Deferrable task for the scheduling queue
+export type TaskSize = "S" | "M" | "L" | "XL";
+
+export interface QueuedTask {
+	id: string;
+	name: string;
+	description: string;
+	size: TaskSize;
+	prompt: string; // the actual prompt to pass to `claude -p`
+	project_dir: string; // working directory for the task
+	priority: number; // lower = higher priority
+	created_at: string;
+	status: "queued" | "running" | "done" | "failed";
+	started_at?: string;
+	completed_at?: string;
+	result_summary?: string;
 }
 
 // Known promo periods — add new ones as Anthropic announces them

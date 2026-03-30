@@ -98,7 +98,23 @@ describe("blockToEntry", () => {
 			model_mix: ["claude-opus-4-6"],
 			source: "ccusage-harvest",
 			notes: "Auto-harvested from ccusage. 323 entries.",
+			token_breakdown: {
+				input: 4688,
+				output: 38346,
+				cache_creation: 531092,
+				cache_read: 38249059,
+			},
+			output_ratio: expect.closeTo(0.891, 2), // 38346 / (4688 + 38346)
+			cache_hit_rate: expect.closeTo(0.986, 2), // 38249059 / (38249059 + 4688 + 531092)
 		});
+	});
+
+	it("computes output_ratio and cache_hit_rate", () => {
+		const entry = blockToEntry(baseBlock, "harvest", "karl");
+		// output / (input + output) = 38346 / 43034
+		expect(entry.output_ratio).toBeGreaterThan(0.8);
+		// cache_read / (cache_read + input + cache_creation)
+		expect(entry.cache_hit_rate).toBeGreaterThan(0.98);
 	});
 
 	it("sets peak_hour based on window start time", () => {

@@ -34,11 +34,25 @@ export function isPromoActive(
 	});
 }
 
+function computeOutputRatio(tc: CcusageBlock["tokenCounts"]): number {
+	const directIO = tc.inputTokens + tc.outputTokens;
+	if (directIO === 0) return 0;
+	return tc.outputTokens / directIO;
+}
+
+function computeCacheHitRate(tc: CcusageBlock["tokenCounts"]): number {
+	const total =
+		tc.cacheReadInputTokens + tc.inputTokens + tc.cacheCreationInputTokens;
+	if (total === 0) return 0;
+	return tc.cacheReadInputTokens / total;
+}
+
 export function blockToEntry(
 	block: CcusageBlock,
 	mode: "harvest" | "snapshot",
 	userId: string,
 ): CalibrationEntry {
+	const tc = block.tokenCounts;
 	return {
 		user_id: userId,
 		window_start: block.startTime,
@@ -53,5 +67,13 @@ export function blockToEntry(
 		model_mix: block.models,
 		source: mode === "harvest" ? "ccusage-harvest" : "ccusage-snapshot",
 		notes: `Auto-${mode === "harvest" ? "harvested from" : "snapshot from"} ccusage. ${block.entries} entries.`,
+		token_breakdown: {
+			input: tc.inputTokens,
+			output: tc.outputTokens,
+			cache_creation: tc.cacheCreationInputTokens,
+			cache_read: tc.cacheReadInputTokens,
+		},
+		output_ratio: computeOutputRatio(tc),
+		cache_hit_rate: computeCacheHitRate(tc),
 	};
 }

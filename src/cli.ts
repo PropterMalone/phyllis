@@ -12,6 +12,7 @@ import {
 } from "./analyze.ts";
 import { harvest, snapshot } from "./harvest.ts";
 import type { CalibrationEntry } from "./types.ts";
+import { buildWeeklySummary, renderWeeklySummary } from "./weekly.ts";
 
 const DEFAULT_LOG_PATH = resolve(process.cwd(), "calibration-log.jsonl");
 
@@ -22,11 +23,13 @@ Usage:
   phyllis harvest [--user <id>] [--log <path>] [--dry-run]
   phyllis snapshot [--user <id>] [--log <path>] [--dry-run]
   phyllis analyze [--log <path>] [--metric <tokens|cost>]
+  phyllis weekly [--log <path>]
 
 Commands:
   harvest   Process completed blocks into calibration entries
   snapshot  Capture the active block with projection data
   analyze   Show usage heatmap and project breakdown
+  weekly    Show weekly summary with burn rate trends
 
 Options:
   --user <id>          User identifier (default: $USER or "unknown")
@@ -36,7 +39,7 @@ Options:
 	process.exit(1);
 }
 
-type Command = "harvest" | "snapshot" | "analyze";
+type Command = "harvest" | "snapshot" | "analyze" | "weekly";
 
 interface ParsedArgs {
 	command: Command;
@@ -52,7 +55,8 @@ function parseArgs(argv: string[]): ParsedArgs {
 	if (
 		command !== "harvest" &&
 		command !== "snapshot" &&
-		command !== "analyze"
+		command !== "analyze" &&
+		command !== "weekly"
 	) {
 		usage();
 	}
@@ -173,13 +177,25 @@ async function runAnalyze(parsed: ParsedArgs): Promise<void> {
 	}
 }
 
+async function runWeekly(parsed: ParsedArgs): Promise<void> {
+	const entries = await readCalibrationLog(parsed.logPath);
+	const weeks = buildWeeklySummary(entries);
+	console.log(`\n  Weekly Summary (${entries.length} blocks)\n`);
+	console.log(renderWeeklySummary(weeks));
+}
+
 async function main(): Promise<void> {
 	const parsed = parseArgs(process.argv);
 
-	if (parsed.command === "analyze") {
-		await runAnalyze(parsed);
-	} else {
-		await runHarvestOrSnapshot(parsed);
+	switch (parsed.command) {
+		case "analyze":
+			await runAnalyze(parsed);
+			break;
+		case "weekly":
+			await runWeekly(parsed);
+			break;
+		default:
+			await runHarvestOrSnapshot(parsed);
 	}
 }
 
