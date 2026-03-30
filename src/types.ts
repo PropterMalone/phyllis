@@ -34,30 +34,52 @@ export interface CcusageBlocksOutput {
 }
 
 // What we write to calibration-log.jsonl
+// Two granularities: block-level (from ccusage harvest) and session-level (from hooks)
 export interface CalibrationEntry {
 	user_id: string;
+	session_id?: string; // present for session-level entries
 	window_start: string;
 	window_end: string;
 	observed_at: string;
-	tokens_consumed: number;
-	cost_equiv: number;
+	tokens_consumed: number; // block-level total (legacy compat)
+	cost_equiv: number; // block-level cost (legacy compat)
 	remaining_min: number | null;
 	throttled: null | boolean; // null = unknown (automated), true/false = manual observation
 	peak_hour: boolean;
 	promo_active: boolean;
 	model_mix: string[];
-	source: "ccusage-harvest" | "ccusage-snapshot" | "manual";
+	source:
+		| "ccusage-harvest"
+		| "ccusage-snapshot"
+		| "session-end-hook"
+		| "manual";
 	notes: string;
 
-	// Compute cost signals — derived from ccusage token breakdown
+	// Block-level token breakdown
 	token_breakdown?: {
 		input: number;
 		output: number;
 		cache_creation: number;
 		cache_read: number;
 	};
-	output_ratio?: number; // output / (input + output), 0-1. Higher = more expensive to serve
+	output_ratio?: number; // output / (input + output), 0-1
 	cache_hit_rate?: number; // cache_read / (cache_read + input + cache_creation), 0-1
+
+	// Session-level attribution (only for session-end-hook entries)
+	session_tokens?: number;
+	session_cost?: number;
+	session_breakdown?: {
+		input: number;
+		output: number;
+		cache_creation: number;
+		cache_read: number;
+	};
+
+	// Rate limit state at time of observation
+	rate_limits?: {
+		five_hour_pct: number;
+		seven_day_pct: number;
+	};
 }
 
 // User profile — context for interpreting calibration data across users
