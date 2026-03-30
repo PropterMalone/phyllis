@@ -15,13 +15,24 @@ export function estimateBlockMinutes(size: TaskSize): number {
 	return SIZE_MINUTES[size];
 }
 
+export interface RateLimitState {
+	fiveHourPct: number; // 0-100, from Anthropic's rate_limits
+	sevenDayPct: number;
+}
+
 export interface SchedulerContext {
 	activeBlock: CcusageBlock | null;
 	nextTaskSize: TaskSize | null;
 	currentHourUTC: number;
 	currentDayUTC: number; // 0=Sun, 6=Sat
 	isWeekday: boolean;
+	rateLimits: RateLimitState | null;
 }
+
+// Don't schedule if weekly budget is above this threshold
+const WEEKLY_BUDGET_THRESHOLD = 85;
+// Don't schedule if window is above this threshold
+const WINDOW_BUDGET_THRESHOLD = 80;
 
 export type SchedulerDecision =
 	| { decision: "schedule"; reason: string }
@@ -29,7 +40,9 @@ export type SchedulerDecision =
 	| { decision: "window_active"; reason: string }
 	| { decision: "window_expiring_soon"; reason: string }
 	| { decision: "peak_hours"; reason: string }
-	| { decision: "too_close_to_interactive"; reason: string };
+	| { decision: "too_close_to_interactive"; reason: string }
+	| { decision: "weekly_budget_low"; reason: string }
+	| { decision: "window_budget_low"; reason: string };
 
 // Peak hours: 5am-11am PT = 12:00-18:00 UTC on weekdays
 const PEAK_START_UTC = 12;
@@ -87,6 +100,22 @@ export function shouldSchedule(ctx: SchedulerContext): SchedulerDecision {
 			decision: "window_expiring_soon",
 			reason: `window expires in ${remaining}min — wait to chain`,
 		};
+	}
+
+	// Check rate limit budgets before opening a new window
+	if (ctx.rateLimits) {
+		if (ctx.rateLimits.sevenDayPct >= WEEKLY_BUDGET_THRESHOLD) {
+			return {
+				decision: "weekly_budget_low",
+				reason: `weekly budget at ${ctx.rateLimits.sevenDayPct}% — preserving for interactive use`,
+			};
+		}
+		if (ctx.rateLimits.fiveHourPct >= WINDOW_BUDGET_THRESHOLD) {
+			return {
+				decision: "window_budget_low",
+				reason: `window at ${ctx.rateLimits.fiveHourPct}% — too little headroom for deferrable work`,
+			};
+		}
 	}
 
 	// No active window — should we open one?

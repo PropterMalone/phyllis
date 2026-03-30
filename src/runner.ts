@@ -2,9 +2,14 @@
 // Cron entry point: check window state, pick a task, run it via claude -p
 
 import { execFile } from "node:child_process";
+import { readFile } from "node:fs/promises";
 import { fetchBlocks } from "./ccusage.ts";
 import { completeTask, failTask, nextTask, startTask } from "./queue.ts";
-import { type SchedulerContext, shouldSchedule } from "./scheduler.ts";
+import {
+	type RateLimitState,
+	type SchedulerContext,
+	shouldSchedule,
+} from "./scheduler.ts";
 
 export interface RunnerOptions {
 	queuePath: string;
@@ -18,6 +23,25 @@ export interface RunnerResult {
 	taskId?: string;
 	taskName?: string;
 	dryRun: boolean;
+}
+
+const RATE_LIMITS_CACHE = "/tmp/phyllis-rate-limits";
+
+async function readRateLimits(): Promise<RateLimitState | null> {
+	try {
+		const content = await readFile(RATE_LIMITS_CACHE, "utf-8");
+		const data = JSON.parse(content) as {
+			five_hour?: { used_percentage?: number };
+			seven_day?: { used_percentage?: number };
+		};
+		if (data.five_hour?.used_percentage == null) return null;
+		return {
+			fiveHourPct: data.five_hour.used_percentage,
+			sevenDayPct: data.seven_day?.used_percentage ?? 0,
+		};
+	} catch {
+		return null;
+	}
 }
 
 async function getActiveBlock() {
@@ -61,6 +85,7 @@ export async function run(options: RunnerOptions): Promise<RunnerResult> {
 
 	const task = await nextTask(queuePath);
 	const activeBlock = await getActiveBlock();
+	const rateLimits = await readRateLimits();
 
 	const now = new Date();
 	const ctx: SchedulerContext = {
@@ -69,6 +94,7 @@ export async function run(options: RunnerOptions): Promise<RunnerResult> {
 		currentHourUTC: now.getUTCHours(),
 		currentDayUTC: now.getUTCDay(),
 		isWeekday: now.getUTCDay() !== 0 && now.getUTCDay() !== 6,
+		rateLimits,
 	};
 
 	const { decision, reason } = shouldSchedule(ctx);

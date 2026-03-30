@@ -14,6 +14,7 @@ const makeContext = (
 	currentHourUTC: 3,
 	currentDayUTC: 1, // Monday
 	isWeekday: true,
+	rateLimits: null,
 	...overrides,
 });
 
@@ -141,5 +142,49 @@ describe("shouldSchedule", () => {
 		);
 		// 16 UTC = 9am PT, which is during typical interactive hours (say 9am-10pm PT)
 		expect(result.decision).toBe("too_close_to_interactive");
+	});
+
+	it("returns 'weekly_budget_low' when 7-day usage is above threshold", () => {
+		const result = shouldSchedule(
+			makeContext({
+				nextTaskSize: "S",
+				currentHourUTC: 3,
+				rateLimits: { fiveHourPct: 0, sevenDayPct: 90 },
+			}),
+		);
+		expect(result.decision).toBe("weekly_budget_low");
+	});
+
+	it("returns 'window_budget_low' when 5-hour usage is above threshold", () => {
+		const result = shouldSchedule(
+			makeContext({
+				nextTaskSize: "S",
+				currentHourUTC: 3,
+				rateLimits: { fiveHourPct: 85, sevenDayPct: 30 },
+			}),
+		);
+		expect(result.decision).toBe("window_budget_low");
+	});
+
+	it("schedules when rate limits are healthy", () => {
+		const result = shouldSchedule(
+			makeContext({
+				nextTaskSize: "S",
+				currentHourUTC: 3,
+				rateLimits: { fiveHourPct: 10, sevenDayPct: 30 },
+			}),
+		);
+		expect(result.decision).toBe("schedule");
+	});
+
+	it("schedules when rate limit data is unavailable", () => {
+		const result = shouldSchedule(
+			makeContext({
+				nextTaskSize: "S",
+				currentHourUTC: 3,
+				rateLimits: null,
+			}),
+		);
+		expect(result.decision).toBe("schedule");
 	});
 });
