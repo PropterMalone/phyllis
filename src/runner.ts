@@ -4,12 +4,20 @@
 import { execFile } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import { fetchBlocks } from "./ccusage.ts";
+import {
+	checkBusy,
+	createEvent,
+	getOrCreatePhyllisCalendar,
+	updateEvent,
+} from "./gcal.ts";
 import { completeTask, failTask, nextTask, startTask } from "./queue.ts";
 import {
+	estimateBlockMinutes,
 	type RateLimitState,
 	type SchedulerContext,
 	shouldSchedule,
 } from "./scheduler.ts";
+import type { PhyllisEvent } from "./types.ts";
 
 export interface RunnerOptions {
 	queuePath: string;
@@ -87,14 +95,23 @@ export async function run(options: RunnerOptions): Promise<RunnerResult> {
 	const activeBlock = await getActiveBlock();
 	const rateLimits = await readRateLimits();
 
-	const now = new Date();
+	// Calendar-aware scheduling
+	let busyNow = false;
+	let busyDuringWindow = false;
+	try {
+		const busy = await checkBusy();
+		busyNow = busy.busyNow;
+		busyDuringWindow = busy.busyDuringWindow;
+	} catch {
+		// If calendar is unavailable, don't block scheduling
+	}
+
 	const ctx: SchedulerContext = {
 		activeBlock,
 		nextTaskSize: task?.size ?? null,
-		currentHourUTC: now.getUTCHours(),
-		currentDayUTC: now.getUTCDay(),
-		isWeekday: now.getUTCDay() !== 0 && now.getUTCDay() !== 6,
 		rateLimits,
+		busyNow,
+		busyDuringWindow,
 	};
 
 	const { decision, reason } = shouldSchedule(ctx);
@@ -125,10 +142,44 @@ export async function run(options: RunnerOptions): Promise<RunnerResult> {
 	// Mark task as running
 	await startTask(queuePath, task.id);
 
+	// Create calendar event
+	let calendarId: string | null = null;
+	let eventId: string | null = null;
+	try {
+		calendarId = await getOrCreatePhyllisCalendar();
+		const durationMin = estimateBlockMinutes(task.size);
+		const now = new Date();
+		const end = new Date(now.getTime() + durationMin * 60 * 1000);
+		const event: PhyllisEvent = {
+			summary: task.name,
+			startTime: now.toISOString(),
+			endTime: end.toISOString(),
+			description: `Size: ${task.size}, Priority: ${task.priority}\n${task.description}`,
+			status: "running",
+		};
+		eventId = await createEvent(calendarId, event);
+	} catch {
+		// Calendar write failure shouldn't block task execution
+	}
+
 	try {
 		const output = await runClaude(task.prompt, task.project_dir);
-		const summary = output.slice(0, 500); // first 500 chars as summary
+		const summary = output.slice(0, 500);
 		await completeTask(queuePath, task.id, summary);
+
+		// Update calendar event — mark done
+		if (calendarId && eventId) {
+			try {
+				await updateEvent(calendarId, eventId, {
+					status: "confirmed",
+					description: `Done: ${summary}`,
+					endTime: new Date().toISOString(),
+				});
+			} catch {
+				// non-fatal
+			}
+		}
+
 		return {
 			decision: "schedule",
 			reason,
@@ -138,6 +189,20 @@ export async function run(options: RunnerOptions): Promise<RunnerResult> {
 		};
 	} catch (err) {
 		await failTask(queuePath, task.id, (err as Error).message.slice(0, 500));
+
+		// Update calendar event — mark failed
+		if (calendarId && eventId) {
+			try {
+				await updateEvent(calendarId, eventId, {
+					status: "cancelled",
+					description: `Failed: ${(err as Error).message.slice(0, 500)}`,
+					endTime: new Date().toISOString(),
+				});
+			} catch {
+				// non-fatal
+			}
+		}
+
 		return {
 			decision: "schedule",
 			reason: `task failed: ${(err as Error).message.slice(0, 100)}`,

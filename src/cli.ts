@@ -10,6 +10,11 @@ import {
 	renderHeatmap,
 	renderProjectTable,
 } from "./analyze.ts";
+import {
+	getOrCreatePhyllisCalendar,
+	listUpcoming,
+	loadConfig,
+} from "./gcal.ts";
 import { harvest, snapshot } from "./harvest.ts";
 import { addTask, listTasks } from "./queue.ts";
 import { run } from "./runner.ts";
@@ -29,6 +34,8 @@ Usage:
   phyllis queue list [--queue <path>]
   phyllis queue add --name <n> --size <S|M|L|XL> --prompt <p> --dir <d> [--priority <n>]
   phyllis run [--queue <path>] [--dry-run]
+  phyllis calendar setup
+  phyllis calendar list [--hours <n>]
 
 Commands:
   harvest   Process completed blocks into calibration entries
@@ -37,6 +44,7 @@ Commands:
   weekly    Show weekly summary with burn rate trends
   queue     Manage deferrable task queue
   run       Check window state and execute next queued task
+  calendar  Manage Phyllis Google Calendar integration
 
 Options:
   --user <id>          User identifier (default: $USER or "unknown")
@@ -46,7 +54,14 @@ Options:
 	process.exit(1);
 }
 
-type Command = "harvest" | "snapshot" | "analyze" | "weekly" | "queue" | "run";
+type Command =
+	| "harvest"
+	| "snapshot"
+	| "analyze"
+	| "weekly"
+	| "queue"
+	| "run"
+	| "calendar";
 
 const DEFAULT_QUEUE_PATH = resolve(process.cwd(), "queue.json");
 
@@ -64,6 +79,7 @@ interface ParsedArgs {
 	taskDir?: string;
 	taskPriority?: number;
 	subcommand?: string;
+	hours?: number;
 }
 
 const VALID_COMMANDS = new Set([
@@ -73,6 +89,7 @@ const VALID_COMMANDS = new Set([
 	"weekly",
 	"queue",
 	"run",
+	"calendar",
 ]);
 
 function parseArgs(argv: string[]): ParsedArgs {
@@ -93,10 +110,15 @@ function parseArgs(argv: string[]): ParsedArgs {
 	let taskPrompt: string | undefined;
 	let taskDir: string | undefined;
 	let taskPriority: number | undefined;
+	let hours: number | undefined;
 
-	// For "queue", first positional after command is the subcommand
+	// For "queue" and "calendar", first positional after command is the subcommand
 	let startIdx = 1;
-	if (command === "queue" && args[1] && !args[1].startsWith("--")) {
+	if (
+		(command === "queue" || command === "calendar") &&
+		args[1] &&
+		!args[1].startsWith("--")
+	) {
 		subcommand = args[1];
 		startIdx = 2;
 	}
@@ -136,6 +158,9 @@ function parseArgs(argv: string[]): ParsedArgs {
 			case "--priority":
 				taskPriority = Number(args[++i]);
 				break;
+			case "--hours":
+				hours = Number(args[++i]);
+				break;
 			default:
 				console.error(`unknown option: ${args[i]}`);
 				usage();
@@ -155,6 +180,7 @@ function parseArgs(argv: string[]): ParsedArgs {
 		taskPrompt,
 		taskDir,
 		taskPriority,
+		hours,
 	};
 }
 
@@ -296,6 +322,45 @@ async function runQueue(parsed: ParsedArgs): Promise<void> {
 	usage();
 }
 
+async function runCalendar(parsed: ParsedArgs): Promise<void> {
+	const { subcommand } = parsed;
+
+	if (subcommand === "setup") {
+		const calendarId = await getOrCreatePhyllisCalendar();
+		const config = await loadConfig();
+		console.log(`Phyllis calendar ready: ${calendarId}`);
+		console.log(
+			`Tracking ${config?.calendarIds?.length ?? 0} calendars for freebusy`,
+		);
+		return;
+	}
+
+	if (subcommand === "list") {
+		const config = await loadConfig();
+		if (!config?.calendarId) {
+			console.error("run 'phyllis calendar setup' first");
+			process.exit(1);
+		}
+		const events = await listUpcoming(config.calendarId, parsed.hours ?? 24);
+		if (events.length === 0) {
+			console.log("no upcoming Phyllis events");
+			return;
+		}
+		console.log(`\n  Phyllis Events (next ${parsed.hours ?? 24}h)\n`);
+		for (const e of events) {
+			const start = new Date(e.startTime).toLocaleString();
+			const status =
+				e.status === "running" ? "▶" : e.status === "done" ? "✓" : "✗";
+			console.log(`  [${status}] ${e.summary} — ${start}`);
+		}
+		return;
+	}
+
+	console.error(`unknown calendar subcommand: ${subcommand ?? "(none)"}`);
+	console.error("usage: phyllis calendar setup | phyllis calendar list");
+	process.exit(1);
+}
+
 async function runScheduler(parsed: ParsedArgs): Promise<void> {
 	const result = await run({
 		queuePath: parsed.queuePath,
@@ -325,6 +390,9 @@ async function main(): Promise<void> {
 			break;
 		case "queue":
 			await runQueue(parsed);
+			break;
+		case "calendar":
+			await runCalendar(parsed);
 			break;
 		case "run":
 			await runScheduler(parsed);

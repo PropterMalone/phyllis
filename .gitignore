@@ -1,3 +1,4 @@
 node_modules/
 dist/
 scheduler.log
+phyllis-calendar.json

@@ -23,10 +23,9 @@ export interface RateLimitState {
 export interface SchedulerContext {
 	activeBlock: CcusageBlock | null;
 	nextTaskSize: TaskSize | null;
-	currentHourUTC: number;
-	currentDayUTC: number; // 0=Sun, 6=Sat
-	isWeekday: boolean;
 	rateLimits: RateLimitState | null;
+	busyNow: boolean; // any calendar event in the next 30min
+	busyDuringWindow: boolean; // any calendar event in the next 5h
 }
 
 // Don't schedule if weekly budget is above this threshold
@@ -39,47 +38,13 @@ export type SchedulerDecision =
 	| { decision: "no_tasks"; reason: string }
 	| { decision: "window_active"; reason: string }
 	| { decision: "window_expiring_soon"; reason: string }
-	| { decision: "peak_hours"; reason: string }
-	| { decision: "too_close_to_interactive"; reason: string }
+	| { decision: "busy_now"; reason: string }
+	| { decision: "busy_during_window"; reason: string }
 	| { decision: "weekly_budget_low"; reason: string }
 	| { decision: "window_budget_low"; reason: string };
 
-// Peak hours: 5am-11am PT = 12:00-18:00 UTC on weekdays
-const PEAK_START_UTC = 12;
-const PEAK_END_UTC = 18;
-
-// Interactive hours: 9am-10pm PT = 16:00-05:00 UTC (wraps midnight)
-// If opening a new 5h window would expire during these hours on a weekday, defer
-const INTERACTIVE_START_UTC = 16;
-const INTERACTIVE_END_UTC = 5;
-
-// Window duration
-const WINDOW_HOURS = 5;
-
 // How many minutes remaining before we consider a window "expiring soon"
 const EXPIRY_THRESHOLD_MIN = 30;
-
-function isInPeakHours(hourUTC: number, isWeekday: boolean): boolean {
-	if (!isWeekday) return false;
-	return hourUTC >= PEAK_START_UTC && hourUTC < PEAK_END_UTC;
-}
-
-function wouldExpireDuringInteractive(
-	hourUTC: number,
-	isWeekday: boolean,
-): boolean {
-	if (!isWeekday) return false;
-	const expiryHour = (hourUTC + WINDOW_HOURS) % 24;
-	// Interactive window wraps midnight: 16 UTC to 05 UTC
-	if (INTERACTIVE_START_UTC > INTERACTIVE_END_UTC) {
-		return (
-			expiryHour >= INTERACTIVE_START_UTC || expiryHour < INTERACTIVE_END_UTC
-		);
-	}
-	return (
-		expiryHour >= INTERACTIVE_START_UTC && expiryHour < INTERACTIVE_END_UTC
-	);
-}
 
 export function shouldSchedule(ctx: SchedulerContext): SchedulerDecision {
 	if (ctx.nextTaskSize === null) {
@@ -118,23 +83,23 @@ export function shouldSchedule(ctx: SchedulerContext): SchedulerDecision {
 		}
 	}
 
-	// No active window — should we open one?
-	if (isInPeakHours(ctx.currentHourUTC, ctx.isWeekday)) {
+	// Calendar-aware scheduling — replaces hardcoded peak/interactive hours
+	if (ctx.busyNow) {
 		return {
-			decision: "peak_hours",
-			reason: "peak hours (5am-11am PT weekdays) — reduced limits, defer",
+			decision: "busy_now",
+			reason: "calendar shows busy in the next 30min — defer",
 		};
 	}
 
-	if (wouldExpireDuringInteractive(ctx.currentHourUTC, ctx.isWeekday)) {
+	if (ctx.busyDuringWindow) {
 		return {
-			decision: "too_close_to_interactive",
-			reason: `window opened now would expire during interactive hours — defer`,
+			decision: "busy_during_window",
+			reason: "calendar shows events in the next 5h — window would conflict",
 		};
 	}
 
 	return {
 		decision: "schedule",
-		reason: "no active window, off-peak, won't conflict with interactive use",
+		reason: "no active window, calendar clear, budget healthy",
 	};
 }

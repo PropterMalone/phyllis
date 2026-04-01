@@ -11,10 +11,9 @@ const makeContext = (
 ): SchedulerContext => ({
 	activeBlock: null,
 	nextTaskSize: null,
-	currentHourUTC: 3,
-	currentDayUTC: 1, // Monday
-	isWeekday: true,
 	rateLimits: null,
+	busyNow: false,
+	busyDuringWindow: false,
 	...overrides,
 });
 
@@ -77,42 +76,7 @@ describe("shouldSchedule", () => {
 		expect(result.decision).toBe("window_active");
 	});
 
-	it("returns 'schedule' when no active block and task is queued during off-peak", () => {
-		const result = shouldSchedule(
-			makeContext({
-				activeBlock: null,
-				nextTaskSize: "S",
-				currentHourUTC: 3, // off-peak
-			}),
-		);
-		expect(result.decision).toBe("schedule");
-	});
-
-	it("returns 'peak_hours' during peak hours on weekdays", () => {
-		const result = shouldSchedule(
-			makeContext({
-				activeBlock: null,
-				nextTaskSize: "S",
-				currentHourUTC: 14, // 7am PT = peak
-				isWeekday: true,
-			}),
-		);
-		expect(result.decision).toBe("peak_hours");
-	});
-
-	it("allows scheduling during peak hours on weekends", () => {
-		const result = shouldSchedule(
-			makeContext({
-				activeBlock: null,
-				nextTaskSize: "S",
-				currentHourUTC: 14,
-				isWeekday: false,
-			}),
-		);
-		expect(result.decision).toBe("schedule");
-	});
-
-	it("returns 'window_expiring_soon' when block expires soon and task fits in next window", () => {
+	it("returns 'window_expiring_soon' when block expires soon", () => {
 		const result = shouldSchedule(
 			makeContext({
 				activeBlock: makeActiveBlock({
@@ -123,32 +87,48 @@ describe("shouldSchedule", () => {
 					},
 				}),
 				nextTaskSize: "S",
-				currentHourUTC: 3,
 			}),
 		);
 		expect(result.decision).toBe("window_expiring_soon");
 	});
 
-	it("returns 'too_close_to_interactive' if window would expire during likely interactive hours", () => {
-		// 3am UTC + 5h window = 8am UTC = 1am PT — not interactive, should schedule
-		// But 11am UTC + 5h = 4pm UTC = 9am PT — that's during interactive hours
+	it("returns 'schedule' when calendar is clear and no active block", () => {
 		const result = shouldSchedule(
 			makeContext({
-				activeBlock: null,
 				nextTaskSize: "S",
-				currentHourUTC: 11, // opening window at 11 UTC, expires at 16 UTC (9am PT)
-				isWeekday: true,
+				busyNow: false,
+				busyDuringWindow: false,
 			}),
 		);
-		// 16 UTC = 9am PT, which is during typical interactive hours (say 9am-10pm PT)
-		expect(result.decision).toBe("too_close_to_interactive");
+		expect(result.decision).toBe("schedule");
+	});
+
+	it("returns 'busy_now' when calendar shows current busy time", () => {
+		const result = shouldSchedule(
+			makeContext({
+				nextTaskSize: "S",
+				busyNow: true,
+				busyDuringWindow: true,
+			}),
+		);
+		expect(result.decision).toBe("busy_now");
+	});
+
+	it("returns 'busy_during_window' when calendar shows events in window", () => {
+		const result = shouldSchedule(
+			makeContext({
+				nextTaskSize: "S",
+				busyNow: false,
+				busyDuringWindow: true,
+			}),
+		);
+		expect(result.decision).toBe("busy_during_window");
 	});
 
 	it("returns 'weekly_budget_low' when 7-day usage is above threshold", () => {
 		const result = shouldSchedule(
 			makeContext({
 				nextTaskSize: "S",
-				currentHourUTC: 3,
 				rateLimits: { fiveHourPct: 0, sevenDayPct: 90 },
 			}),
 		);
@@ -159,18 +139,16 @@ describe("shouldSchedule", () => {
 		const result = shouldSchedule(
 			makeContext({
 				nextTaskSize: "S",
-				currentHourUTC: 3,
 				rateLimits: { fiveHourPct: 85, sevenDayPct: 30 },
 			}),
 		);
 		expect(result.decision).toBe("window_budget_low");
 	});
 
-	it("schedules when rate limits are healthy", () => {
+	it("schedules when rate limits are healthy and calendar clear", () => {
 		const result = shouldSchedule(
 			makeContext({
 				nextTaskSize: "S",
-				currentHourUTC: 3,
 				rateLimits: { fiveHourPct: 10, sevenDayPct: 30 },
 			}),
 		);
@@ -181,10 +159,21 @@ describe("shouldSchedule", () => {
 		const result = shouldSchedule(
 			makeContext({
 				nextTaskSize: "S",
-				currentHourUTC: 3,
 				rateLimits: null,
 			}),
 		);
 		expect(result.decision).toBe("schedule");
+	});
+
+	it("rate limits take priority over calendar checks", () => {
+		const result = shouldSchedule(
+			makeContext({
+				nextTaskSize: "S",
+				rateLimits: { fiveHourPct: 0, sevenDayPct: 90 },
+				busyNow: false,
+				busyDuringWindow: false,
+			}),
+		);
+		expect(result.decision).toBe("weekly_budget_low");
 	});
 });

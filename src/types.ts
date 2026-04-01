@@ -134,6 +134,16 @@ export interface QueuedTask {
 	result_summary?: string;
 }
 
+// Calendar event representing a Phyllis-scheduled task
+export interface PhyllisEvent {
+	summary: string;
+	startTime: string; // ISO 8601
+	endTime: string; // ISO 8601
+	description?: string;
+	status: "running" | "done" | "failed";
+	eventId?: string; // set after creation
+}
+
 // Known promo periods — add new ones as Anthropic announces them
 export interface PromoRange {
 	start: string; // ISO 8601
