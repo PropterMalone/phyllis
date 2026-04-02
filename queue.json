@@ -8,10 +8,7 @@
 		"project_dir": "/home/karl/Projects/starcounter",
 		"priority": 10,
 		"created_at": "2026-03-30T19:41:56.678Z",
-		"status": "failed",
-		"started_at": "2026-03-31T03:00:12.430Z",
-		"completed_at": "2026-03-31T03:30:16.185Z",
-		"result_summary": "claude -p failed: Command failed: claude -p Run /angel --full on the entire starcounter codebase. All 9 personas. Write report to /tmp/angel-starcounter.md --output-format text\nWarning: no stdin data received in 3s, proceeding without it. If piping from a slow command, redirect stdin explicitly: < /dev/null to skip, or wait longer.\n\nWarning: no stdin data received in 3s, proceeding without it. If piping from a slow command, redirect stdin explicitly: < /dev/null to skip, or wait longer.\n"
+		"status": "queued"
 	},
 	{
 		"id": "42b2d443-0bf1-436f-be44-6ebcf4322e90",
@@ -130,6 +127,17 @@
 		"project_dir": "/home/karl/Projects/NormalMen",
 		"priority": 25,
 		"created_at": "2026-04-02T03:10:47.744Z",
+		"status": "queued"
+	},
+	{
+		"id": "57a52436-dc90-43ee-a6f8-505a1866098f",
+		"name": "3CB R8 resolution",
+		"description": "3CB R8 resolution",
+		"size": "XL",
+		"prompt": "Run /resolve-round to evaluate all matchups for R8. 12 players, 66 matchups. Three players submitted identical LED/Shadowgrange Archfiend decks (tomscud with Wasteland, ryanstephens with Wasteland, elyv with Memnite) — tomscud and ryanstephens are exact dupes. Follow the resolve-round skill exactly: load round data, check historical matchups, deduplicate identical decks, generate deck plans (show to user for review — since this is unattended, proceed after generating them), spawn per-deck agents (2 at a time, Sonnet model), crosscheck, present results summary. Write all results to DB and generate the dashboard. Leave the round in resolution phase for community corrections. Write a summary of all results and any disagreements to /tmp/r8-resolution-summary.md.",
+		"project_dir": "/home/karl/Projects/3cblue",
+		"priority": 1,
+		"created_at": "2026-04-02T03:16:21.766Z",
 		"status": "queued"
 	}
 ]

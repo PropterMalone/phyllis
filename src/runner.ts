@@ -1,8 +1,9 @@
 // pattern: imperative-shell
-// Cron entry point: check window state, pick a task, run it via claude -p
+// Cron entry point: check window state, drain queue within the current window
 
-import { execFile } from "node:child_process";
-import { readFile } from "node:fs/promises";
+import { type ChildProcess, spawn } from "node:child_process";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import { fetchBlocks } from "./ccusage.ts";
 import {
 	checkBusy,
@@ -18,7 +19,7 @@ import {
 	type SchedulerContext,
 	shouldSchedule,
 } from "./scheduler.ts";
-import type { PhyllisEvent } from "./types.ts";
+import type { CcusageBlock, PhyllisEvent, TaskSize } from "./types.ts";
 
 export interface RunnerOptions {
 	queuePath: string;
@@ -26,16 +27,35 @@ export interface RunnerOptions {
 	dryRun?: boolean;
 }
 
+export interface TaskOutcome {
+	taskId: string;
+	taskName: string;
+	success: boolean;
+	durationMs: number;
+	reason: string;
+}
+
 export interface RunnerResult {
 	decision: string;
 	reason: string;
-	taskId?: string;
-	taskName?: string;
+	tasks: TaskOutcome[];
 	dryRun: boolean;
 }
 
 const RATE_LIMITS_CACHE = "/tmp/phyllis-rate-limits";
 const DOCKET_RESERVATIONS = `${process.env.HOME ?? "/home/karl"}/.docket/reservations.json`;
+const TASK_LOGS_DIR = `${process.env.HOME ?? "/home/karl"}/.phyllis/task-logs`;
+
+// Scale timeout by task size — L/XL tasks (NineAngel batteries, 3CB resolution) need more time
+export const SIZE_TIMEOUT_MS: Record<TaskSize, number> = {
+	S: 15 * 60 * 1000, // 15 min
+	M: 30 * 60 * 1000, // 30 min
+	L: 60 * 60 * 1000, // 60 min
+	XL: 120 * 60 * 1000, // 120 min
+};
+
+// Max consecutive failures before giving up for this invocation
+const MAX_CONSECUTIVE_FAILURES = 3;
 
 async function readRateLimits(): Promise<RateLimitState | null> {
 	try {
@@ -62,7 +82,6 @@ async function readActiveReservation(): Promise<DocketReservation | null> {
 		const fiveHoursLater = new Date(
 			Date.now() + 5 * 60 * 60 * 1000,
 		).toISOString();
-		// Find any reservation that overlaps the next 5 hours
 		return (
 			reservations.find((r) => r.end > now && r.start < fiveHoursLater) ?? null
 		);
@@ -71,7 +90,7 @@ async function readActiveReservation(): Promise<DocketReservation | null> {
 	}
 }
 
-async function getActiveBlock() {
+async function getActiveBlock(): Promise<CcusageBlock | null> {
 	try {
 		const blocks = await fetchBlocks();
 		return blocks.find((b) => b.isActive) ?? null;
@@ -80,31 +99,190 @@ async function getActiveBlock() {
 	}
 }
 
-function runClaude(prompt: string, projectDir: string): Promise<string> {
+function runClaude(
+	prompt: string,
+	projectDir: string,
+	size: TaskSize,
+): Promise<{ stdout: string; stderr: string }> {
 	return new Promise((resolve, reject) => {
 		const env = { ...process.env };
-		// Nested Claude Code sessions need env cleanup
 		delete env.CLAUDE_CODE;
 		delete env.CLAUDECODE;
 
-		execFile(
+		const child: ChildProcess = spawn(
 			"claude",
 			["-p", prompt, "--output-format", "text"],
 			{
 				cwd: projectDir,
-				maxBuffer: 50 * 1024 * 1024,
-				timeout: 30 * 60 * 1000, // 30 min max
 				env,
-			},
-			(error, stdout, stderr) => {
-				if (error) {
-					reject(new Error(`claude -p failed: ${error.message}\n${stderr}`));
-					return;
-				}
-				resolve(stdout);
+				stdio: ["ignore", "pipe", "pipe"],
 			},
 		);
+
+		let stdout = "";
+		let stderr = "";
+		const maxBuffer = 50 * 1024 * 1024;
+		const timeout = SIZE_TIMEOUT_MS[size];
+
+		const timer = setTimeout(() => {
+			child.kill("SIGTERM");
+			reject(
+				new Error(
+					`claude -p timed out after ${timeout / 60000}min\n---STDERR---\n${stderr}`,
+				),
+			);
+		}, timeout);
+
+		child.stdout?.on("data", (chunk: Buffer) => {
+			stdout += chunk.toString();
+			if (stdout.length > maxBuffer) {
+				child.kill("SIGTERM");
+				reject(new Error("claude -p exceeded max output buffer"));
+			}
+		});
+
+		child.stderr?.on("data", (chunk: Buffer) => {
+			stderr += chunk.toString();
+		});
+
+		child.on("close", (code) => {
+			clearTimeout(timer);
+			if (code !== 0) {
+				reject(
+					new Error(
+						`claude -p exited with code ${code}\n---STDERR---\n${stderr}`,
+					),
+				);
+				return;
+			}
+			resolve({ stdout, stderr });
+		});
+
+		child.on("error", (err) => {
+			clearTimeout(timer);
+			reject(new Error(`claude -p failed to start: ${err.message}`));
+		});
 	});
+}
+
+async function writeTaskLog(
+	_taskId: string,
+	taskName: string,
+	content: string,
+): Promise<void> {
+	try {
+		await mkdir(TASK_LOGS_DIR, { recursive: true });
+		const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+		const safeName = taskName.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 60);
+		const filename = `${timestamp}_${safeName}.log`;
+		await writeFile(join(TASK_LOGS_DIR, filename), content);
+	} catch {
+		// Log writing is best-effort
+	}
+}
+
+async function executeTask(
+	queuePath: string,
+	task: {
+		id: string;
+		name: string;
+		size: TaskSize;
+		priority: number;
+		description: string;
+		prompt: string;
+		project_dir: string;
+	},
+): Promise<TaskOutcome> {
+	const startMs = Date.now();
+	await startTask(queuePath, task.id);
+
+	let calendarId: string | null = null;
+	let eventId: string | null = null;
+	try {
+		calendarId = await getOrCreatePhyllisCalendar();
+		const durationMin = estimateBlockMinutes(task.size);
+		const now = new Date();
+		const end = new Date(now.getTime() + durationMin * 60 * 1000);
+		const event: PhyllisEvent = {
+			summary: task.name,
+			startTime: now.toISOString(),
+			endTime: end.toISOString(),
+			description: `Size: ${task.size}, Priority: ${task.priority}\n${task.description}`,
+			status: "running",
+		};
+		eventId = await createEvent(calendarId, event);
+	} catch {
+		// Calendar write failure shouldn't block task execution
+	}
+
+	try {
+		const { stdout, stderr } = await runClaude(
+			task.prompt,
+			task.project_dir,
+			task.size,
+		);
+		const summary = stdout.slice(0, 500);
+		const durationMs = Date.now() - startMs;
+		await completeTask(queuePath, task.id, summary);
+
+		// Log full output for posterity
+		await writeTaskLog(
+			task.id,
+			task.name,
+			`TASK: ${task.name}\nSIZE: ${task.size}\nDIR: ${task.project_dir}\nDURATION: ${Math.round(durationMs / 1000)}s\nSTATUS: done\n\n---PROMPT---\n${task.prompt}\n\n---STDOUT---\n${stdout}\n\n---STDERR---\n${stderr}`,
+		);
+
+		if (calendarId && eventId) {
+			try {
+				await updateEvent(calendarId, eventId, {
+					status: "confirmed",
+					description: `Done: ${summary}`,
+					endTime: new Date().toISOString(),
+				});
+			} catch {
+				// non-fatal
+			}
+		}
+
+		return {
+			taskId: task.id,
+			taskName: task.name,
+			success: true,
+			durationMs,
+			reason: "completed",
+		};
+	} catch (err) {
+		const errMsg = (err as Error).message;
+		const durationMs = Date.now() - startMs;
+		await failTask(queuePath, task.id, errMsg.slice(0, 500));
+
+		// Log full error for debugging
+		await writeTaskLog(
+			task.id,
+			task.name,
+			`TASK: ${task.name}\nSIZE: ${task.size}\nDIR: ${task.project_dir}\nDURATION: ${Math.round(durationMs / 1000)}s\nSTATUS: failed\n\n---PROMPT---\n${task.prompt}\n\n---ERROR---\n${errMsg}`,
+		);
+
+		if (calendarId && eventId) {
+			try {
+				await updateEvent(calendarId, eventId, {
+					status: "cancelled",
+					description: `Failed: ${errMsg.slice(0, 500)}`,
+					endTime: new Date().toISOString(),
+				});
+			} catch {
+				// non-fatal
+			}
+		}
+
+		return {
+			taskId: task.id,
+			taskName: task.name,
+			success: false,
+			durationMs,
+			reason: `failed: ${errMsg.slice(0, 100)}`,
+		};
+	}
 }
 
 export async function run(options: RunnerOptions): Promise<RunnerResult> {
@@ -117,7 +295,6 @@ export async function run(options: RunnerOptions): Promise<RunnerResult> {
 		readActiveReservation(),
 	]);
 
-	// Calendar-aware scheduling
 	let busyNow = false;
 	let busyDuringWindow = false;
 	try {
@@ -140,14 +317,14 @@ export async function run(options: RunnerOptions): Promise<RunnerResult> {
 	const { decision, reason } = shouldSchedule(ctx);
 
 	if (decision !== "schedule") {
-		return { decision, reason, dryRun };
+		return { decision, reason, tasks: [], dryRun };
 	}
 
-	// We have a task and the scheduler says go
 	if (!task) {
 		return {
 			decision: "no_tasks",
 			reason: "scheduler approved but no task found",
+			tasks: [],
 			dryRun,
 		};
 	}
@@ -156,82 +333,75 @@ export async function run(options: RunnerOptions): Promise<RunnerResult> {
 		return {
 			decision: "schedule",
 			reason,
-			taskId: task.id,
-			taskName: task.name,
+			tasks: [
+				{
+					taskId: task.id,
+					taskName: task.name,
+					success: false,
+					durationMs: 0,
+					reason: "dry run",
+				},
+			],
 			dryRun: true,
 		};
 	}
 
-	// Mark task as running
-	await startTask(queuePath, task.id);
+	// Drain loop: keep running tasks while window has capacity
+	return drainQueue(queuePath, task);
+}
 
-	// Create calendar event
-	let calendarId: string | null = null;
-	let eventId: string | null = null;
-	try {
-		calendarId = await getOrCreatePhyllisCalendar();
-		const durationMin = estimateBlockMinutes(task.size);
-		const now = new Date();
-		const end = new Date(now.getTime() + durationMin * 60 * 1000);
-		const event: PhyllisEvent = {
-			summary: task.name,
-			startTime: now.toISOString(),
-			endTime: end.toISOString(),
-			description: `Size: ${task.size}, Priority: ${task.priority}\n${task.description}`,
-			status: "running",
-		};
-		eventId = await createEvent(calendarId, event);
-	} catch {
-		// Calendar write failure shouldn't block task execution
-	}
+async function drainQueue(
+	queuePath: string,
+	firstTask: Parameters<typeof executeTask>[1],
+): Promise<RunnerResult> {
+	const outcomes: TaskOutcome[] = [];
+	let currentTask: Parameters<typeof executeTask>[1] | null = firstTask;
+	let consecutiveFailures = 0;
 
-	try {
-		const output = await runClaude(task.prompt, task.project_dir);
-		const summary = output.slice(0, 500);
-		await completeTask(queuePath, task.id, summary);
+	while (currentTask) {
+		const outcome = await executeTask(queuePath, currentTask);
+		outcomes.push(outcome);
 
-		// Update calendar event — mark done
-		if (calendarId && eventId) {
-			try {
-				await updateEvent(calendarId, eventId, {
-					status: "confirmed",
-					description: `Done: ${summary}`,
-					endTime: new Date().toISOString(),
-				});
-			} catch {
-				// non-fatal
+		if (outcome.success) {
+			consecutiveFailures = 0;
+		} else {
+			consecutiveFailures++;
+			if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
+				break;
 			}
 		}
 
-		return {
-			decision: "schedule",
-			reason,
-			taskId: task.id,
-			taskName: task.name,
-			dryRun: false,
-		};
-	} catch (err) {
-		await failTask(queuePath, task.id, (err as Error).message.slice(0, 500));
+		// Check if we should keep going
+		const next = await nextTask(queuePath);
+		if (!next) break;
 
-		// Update calendar event — mark failed
-		if (calendarId && eventId) {
-			try {
-				await updateEvent(calendarId, eventId, {
-					status: "cancelled",
-					description: `Failed: ${(err as Error).message.slice(0, 500)}`,
-					endTime: new Date().toISOString(),
-				});
-			} catch {
-				// non-fatal
-			}
+		// Re-check scheduling constraints (calendar, reservations, budget)
+		// Window crossing is fine — a new window just opens. But we should
+		// respect calendar events and budget that may have changed.
+		const [, limits, resv] = await Promise.all([
+			getActiveBlock(),
+			readRateLimits(),
+			readActiveReservation(),
+		]);
+		let busy = false;
+		try {
+			busy = (await checkBusy()).busyNow;
+		} catch {
+			// calendar unavailable, proceed
 		}
+		if (busy) break;
+		if (resv?.intensity === "heavy" && next.size !== "S") break;
+		if (limits && limits.sevenDayPct >= 85) break;
 
-		return {
-			decision: "schedule",
-			reason: `task failed: ${(err as Error).message.slice(0, 100)}`,
-			taskId: task.id,
-			taskName: task.name,
-			dryRun: false,
-		};
+		currentTask = next;
 	}
+
+	const succeeded = outcomes.filter((o) => o.success).length;
+	const failed = outcomes.filter((o) => !o.success).length;
+	const reason =
+		outcomes.length === 0
+			? "no tasks executed"
+			: `${succeeded} completed, ${failed} failed`;
+
+	return { decision: "schedule", reason, tasks: outcomes, dryRun: false };
 }

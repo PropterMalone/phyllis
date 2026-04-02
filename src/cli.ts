@@ -369,12 +369,15 @@ async function runScheduler(parsed: ParsedArgs): Promise<void> {
 	});
 
 	const prefix = result.dryRun ? "[dry-run] " : "";
-	if (result.taskName) {
-		console.log(
-			`${prefix}${result.decision}: ${result.taskName} — ${result.reason}`,
-		);
-	} else {
+	if (result.tasks.length === 0) {
 		console.log(`${prefix}${result.decision}: ${result.reason}`);
+	} else {
+		for (const t of result.tasks) {
+			const dur = Math.round(t.durationMs / 1000);
+			const status = t.success ? "done" : "FAILED";
+			console.log(`${prefix}${status}: ${t.taskName} (${dur}s) — ${t.reason}`);
+		}
+		console.log(`${prefix}${result.reason}`);
 	}
 }
 
