@@ -20,12 +20,19 @@ export interface RateLimitState {
 	sevenDayPct: number;
 }
 
+export interface DocketReservation {
+	start: string; // ISO 8601
+	end: string;
+	intensity: "light" | "heavy";
+}
+
 export interface SchedulerContext {
 	activeBlock: CcusageBlock | null;
 	nextTaskSize: TaskSize | null;
 	rateLimits: RateLimitState | null;
 	busyNow: boolean; // any calendar event in the next 30min
 	busyDuringWindow: boolean; // any calendar event in the next 5h
+	reservation: DocketReservation | null; // Docket says Karl expects to use Claude
 }
 
 // Don't schedule if weekly budget is above this threshold
@@ -41,7 +48,8 @@ export type SchedulerDecision =
 	| { decision: "busy_now"; reason: string }
 	| { decision: "busy_during_window"; reason: string }
 	| { decision: "weekly_budget_low"; reason: string }
-	| { decision: "window_budget_low"; reason: string };
+	| { decision: "window_budget_low"; reason: string }
+	| { decision: "reserved_heavy"; reason: string };
 
 // How many minutes remaining before we consider a window "expiring soon"
 const EXPIRY_THRESHOLD_MIN = 30;
@@ -81,6 +89,15 @@ export function shouldSchedule(ctx: SchedulerContext): SchedulerDecision {
 				reason: `window at ${ctx.rateLimits.fiveHourPct}% — too little headroom for deferrable work`,
 			};
 		}
+	}
+
+	// Docket reservations — Karl plans to use Claude interactively
+	if (ctx.reservation?.intensity === "heavy" && ctx.nextTaskSize !== "S") {
+		return {
+			decision: "reserved_heavy",
+			reason:
+				"Docket reserved heavy interactive use — deferring non-small tasks",
+		};
 	}
 
 	// Calendar-aware scheduling — replaces hardcoded peak/interactive hours

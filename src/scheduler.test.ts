@@ -14,6 +14,7 @@ const makeContext = (
 	rateLimits: null,
 	busyNow: false,
 	busyDuringWindow: false,
+	reservation: null,
 	...overrides,
 });
 
@@ -160,6 +161,48 @@ describe("shouldSchedule", () => {
 			makeContext({
 				nextTaskSize: "S",
 				rateLimits: null,
+			}),
+		);
+		expect(result.decision).toBe("schedule");
+	});
+
+	it("returns 'reserved_heavy' when Docket has heavy reservation and task is not S", () => {
+		const result = shouldSchedule(
+			makeContext({
+				nextTaskSize: "L",
+				reservation: {
+					start: "2026-04-02T14:00:00-04:00",
+					end: "2026-04-02T17:00:00-04:00",
+					intensity: "heavy",
+				},
+			}),
+		);
+		expect(result.decision).toBe("reserved_heavy");
+	});
+
+	it("allows S tasks even during heavy reservation", () => {
+		const result = shouldSchedule(
+			makeContext({
+				nextTaskSize: "S",
+				reservation: {
+					start: "2026-04-02T14:00:00-04:00",
+					end: "2026-04-02T17:00:00-04:00",
+					intensity: "heavy",
+				},
+			}),
+		);
+		expect(result.decision).toBe("schedule");
+	});
+
+	it("allows scheduling during light reservation", () => {
+		const result = shouldSchedule(
+			makeContext({
+				nextTaskSize: "L",
+				reservation: {
+					start: "2026-04-02T14:00:00-04:00",
+					end: "2026-04-02T17:00:00-04:00",
+					intensity: "light",
+				},
 			}),
 		);
 		expect(result.decision).toBe("schedule");

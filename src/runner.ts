@@ -12,6 +12,7 @@ import {
 } from "./gcal.ts";
 import { completeTask, failTask, nextTask, startTask } from "./queue.ts";
 import {
+	type DocketReservation,
 	estimateBlockMinutes,
 	type RateLimitState,
 	type SchedulerContext,
@@ -34,6 +35,7 @@ export interface RunnerResult {
 }
 
 const RATE_LIMITS_CACHE = "/tmp/phyllis-rate-limits";
+const DOCKET_RESERVATIONS = `${process.env.HOME ?? "/home/karl"}/.docket/reservations.json`;
 
 async function readRateLimits(): Promise<RateLimitState | null> {
 	try {
@@ -47,6 +49,23 @@ async function readRateLimits(): Promise<RateLimitState | null> {
 			fiveHourPct: data.five_hour.used_percentage,
 			sevenDayPct: data.seven_day?.used_percentage ?? 0,
 		};
+	} catch {
+		return null;
+	}
+}
+
+async function readActiveReservation(): Promise<DocketReservation | null> {
+	try {
+		const content = await readFile(DOCKET_RESERVATIONS, "utf-8");
+		const reservations = JSON.parse(content) as DocketReservation[];
+		const now = new Date().toISOString();
+		const fiveHoursLater = new Date(
+			Date.now() + 5 * 60 * 60 * 1000,
+		).toISOString();
+		// Find any reservation that overlaps the next 5 hours
+		return (
+			reservations.find((r) => r.end > now && r.start < fiveHoursLater) ?? null
+		);
 	} catch {
 		return null;
 	}
@@ -92,8 +111,11 @@ export async function run(options: RunnerOptions): Promise<RunnerResult> {
 	const { queuePath, dryRun = false } = options;
 
 	const task = await nextTask(queuePath);
-	const activeBlock = await getActiveBlock();
-	const rateLimits = await readRateLimits();
+	const [activeBlock, rateLimits, reservation] = await Promise.all([
+		getActiveBlock(),
+		readRateLimits(),
+		readActiveReservation(),
+	]);
 
 	// Calendar-aware scheduling
 	let busyNow = false;
@@ -112,6 +134,7 @@ export async function run(options: RunnerOptions): Promise<RunnerResult> {
 		rateLimits,
 		busyNow,
 		busyDuringWindow,
+		reservation,
 	};
 
 	const { decision, reason } = shouldSchedule(ctx);
