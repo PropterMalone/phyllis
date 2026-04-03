@@ -201,3 +201,332 @@
 {"user_id":"unknown","window_start":"2026-04-01T18:00:00.000Z","window_end":"2026-04-01T23:00:00.000Z","observed_at":"2026-04-01T23:00:07.864Z","tokens_consumed":53764122,"cost_equiv":33.5803427,"remaining_min":null,"throttled":null,"peak_hour":false,"promo_active":false,"model_mix":["claude-opus-4-6","claude-haiku-4-5-20251001","claude-sonnet-4-6"],"source":"ccusage-harvest","notes":"Auto-harvested from ccusage. 662 entries.","token_breakdown":{"input":1273,"output":64651,"cache_creation":1182880,"cache_read":52515318},"output_ratio":0.9806898853224926,"cache_hit_rate":0.9779485164760748}
 {"user_id":"unknown","window_start":"2026-04-01T23:00:00.000Z","window_end":"2026-04-02T04:00:00.000Z","observed_at":"2026-04-02T04:00:07.643Z","tokens_consumed":68147613,"cost_equiv":41.474829899999996,"remaining_min":null,"throttled":null,"peak_hour":false,"promo_active":false,"model_mix":["claude-opus-4-6","claude-haiku-4-5-20251001"],"source":"ccusage-harvest","notes":"Auto-harvested from ccusage. 816 entries.","token_breakdown":{"input":9139,"output":108777,"cache_creation":1476316,"cache_read":66553381},"output_ratio":0.9224956748872079,"cache_hit_rate":0.978167542431208}
 {"user_id":"unknown","window_start":"2026-04-02T04:00:00.000Z","window_end":"2026-04-02T09:00:00.000Z","observed_at":"2026-04-02T09:00:07.808Z","tokens_consumed":2110517,"cost_equiv":2.6405771,"remaining_min":null,"throttled":null,"peak_hour":false,"promo_active":false,"model_mix":["claude-opus-4-6","claude-sonnet-4-6"],"source":"ccusage-harvest","notes":"Auto-harvested from ccusage. 39 entries.","token_breakdown":{"input":59,"output":45191,"cache_creation":209920,"cache_read":1855347},"output_ratio":0.9986961325966851,"cache_hit_rate":0.8983313045979182}
+{"user_id":"unknown","window_start":"2026-03-02T17:00:00.000Z","window_end":"2026-03-02T22:00:00.000Z","observed_at":"2026-04-02T18:00:07.668Z","tokens_consumed":159563,"cost_equiv":0.17352465000000003,"remaining_min":null,"throttled":null,"peak_hour":true,"promo_active":false,"model_mix":["claude-haiku-4-5-20251001","claude-sonnet-4-6"],"source":"ccusage-harvest","notes":"Auto-harvested from ccusage. 11 entries.","token_breakdown":{"input":29,"output":2308,"cache_creation":60429,"cache_read":96797},"output_ratio":0.9875909285408644,"cache_hit_rate":0.6155416361959875}
+{"user_id":"unknown","window_start":"2026-04-02T13:00:00.000Z","window_end":"2026-04-02T18:00:00.000Z","observed_at":"2026-04-02T18:00:07.668Z","tokens_consumed":42819849,"cost_equiv":26.737318700000017,"remaining_min":null,"throttled":null,"peak_hour":true,"promo_active":false,"model_mix":["claude-opus-4-6","claude-haiku-4-5-20251001"],"source":"ccusage-harvest","notes":"Auto-harvested from ccusage. 539 entries.","token_breakdown":{"input":7993,"output":81095,"cache_creation":994808,"cache_read":41735953},"output_ratio":0.9102797234195402,"cache_hit_rate":0.9765364942553075}
+{"user_id":"unknown","window_start":"2026-04-02T18:00:00.000Z","window_end":"2026-04-02T23:00:00.000Z","observed_at":"2026-04-02T23:00:07.303Z","tokens_consumed":70508607,"cost_equiv":41.820418950000025,"remaining_min":null,"throttled":null,"peak_hour":false,"promo_active":false,"model_mix":["claude-opus-4-6","claude-haiku-4-5-20251001"],"source":"ccusage-harvest","notes":"Auto-harvested from ccusage. 387 entries.","token_breakdown":{"input":13740,"output":43482,"cache_creation":751787,"cache_read":69699598},"output_ratio":0.7598825626507287,"cache_hit_rate":0.9891360868230915}
+{"user_id":"unknown","window_start":"2026-04-03T02:00:00.000Z","window_end":"2026-04-03T07:00:00.000Z","observed_at":"2026-04-03T07:00:07.262Z","tokens_consumed":39539372,"cost_equiv":27.716417749999998,"remaining_min":null,"throttled":null,"peak_hour":false,"promo_active":false,"model_mix":["claude-opus-4-6"],"source":"ccusage-harvest","notes":"Auto-harvested from ccusage. 181 entries.","token_breakdown":{"input":307,"output":21756,"cache_creation":371010,"cache_read":39146299},"output_ratio":0.986085301182976,"cache_hit_rate":0.9906037601053667}
+{
+  "user_id": "unknown",
+  "window_start": "2026-04-03T02:00:00.000Z",
+  "window_end": "",
+  "observed_at": "2026-04-03T08:17:30.000Z",
+  "tokens_consumed": 39278158,
+  "cost_equiv": 27.537574749999997,
+  "remaining_min": 0,
+  "throttled": true,
+  "peak_hour": false,
+  "promo_active": false,
+  "model_mix": [
+    "claude-opus-4-6"
+  ],
+  "source": "manual",
+  "notes": "Rate limit hit detected by StopFailure hook. Window pct at throttle: 63%"
+}
+{
+  "user_id": "unknown",
+  "window_start": "2026-04-03T02:00:00.000Z",
+  "window_end": "",
+  "observed_at": "2026-04-03T08:17:33.000Z",
+  "tokens_consumed": 39278158,
+  "cost_equiv": 27.537574749999997,
+  "remaining_min": 0,
+  "throttled": true,
+  "peak_hour": false,
+  "promo_active": false,
+  "model_mix": [
+    "claude-opus-4-6"
+  ],
+  "source": "manual",
+  "notes": "Rate limit hit detected by StopFailure hook. Window pct at throttle: 63%"
+}
+{
+  "user_id": "unknown",
+  "window_start": "2026-04-03T02:00:00.000Z",
+  "window_end": "",
+  "observed_at": "2026-04-03T08:17:33.000Z",
+  "tokens_consumed": 39278158,
+  "cost_equiv": 27.537574749999997,
+  "remaining_min": 0,
+  "throttled": true,
+  "peak_hour": false,
+  "promo_active": false,
+  "model_mix": [
+    "claude-opus-4-6"
+  ],
+  "source": "manual",
+  "notes": "Rate limit hit detected by StopFailure hook. Window pct at throttle: 63%"
+}
+{
+  "user_id": "unknown",
+  "window_start": "2026-04-03T02:00:00.000Z",
+  "window_end": "",
+  "observed_at": "2026-04-03T08:17:34.000Z",
+  "tokens_consumed": 39278158,
+  "cost_equiv": 27.537574749999997,
+  "remaining_min": 0,
+  "throttled": true,
+  "peak_hour": false,
+  "promo_active": false,
+  "model_mix": [
+    "claude-opus-4-6"
+  ],
+  "source": "manual",
+  "notes": "Rate limit hit detected by StopFailure hook. Window pct at throttle: 63%"
+}
+{
+  "user_id": "unknown",
+  "window_start": "2026-04-03T02:00:00.000Z",
+  "window_end": "",
+  "observed_at": "2026-04-03T08:17:36.000Z",
+  "tokens_consumed": 39278158,
+  "cost_equiv": 27.537574749999997,
+  "remaining_min": 0,
+  "throttled": true,
+  "peak_hour": false,
+  "promo_active": false,
+  "model_mix": [
+    "claude-opus-4-6"
+  ],
+  "source": "manual",
+  "notes": "Rate limit hit detected by StopFailure hook. Window pct at throttle: 63%"
+}
+{
+  "user_id": "unknown",
+  "window_start": "2026-04-03T02:00:00.000Z",
+  "window_end": "",
+  "observed_at": "2026-04-03T08:17:37.000Z",
+  "tokens_consumed": 39278158,
+  "cost_equiv": 27.537574749999997,
+  "remaining_min": 0,
+  "throttled": true,
+  "peak_hour": false,
+  "promo_active": false,
+  "model_mix": [
+    "claude-opus-4-6"
+  ],
+  "source": "manual",
+  "notes": "Rate limit hit detected by StopFailure hook. Window pct at throttle: 63%"
+}
+{
+  "user_id": "unknown",
+  "window_start": "2026-04-03T02:00:00.000Z",
+  "window_end": "",
+  "observed_at": "2026-04-03T08:17:38.000Z",
+  "tokens_consumed": 39278158,
+  "cost_equiv": 27.537574749999997,
+  "remaining_min": 0,
+  "throttled": true,
+  "peak_hour": false,
+  "promo_active": false,
+  "model_mix": [
+    "claude-opus-4-6"
+  ],
+  "source": "manual",
+  "notes": "Rate limit hit detected by StopFailure hook. Window pct at throttle: 63%"
+}
+{
+  "user_id": "unknown",
+  "window_start": "2026-04-03T02:00:00.000Z",
+  "window_end": "",
+  "observed_at": "2026-04-03T08:17:38.000Z",
+  "tokens_consumed": 39278158,
+  "cost_equiv": 27.537574749999997,
+  "remaining_min": 0,
+  "throttled": true,
+  "peak_hour": false,
+  "promo_active": false,
+  "model_mix": [
+    "claude-opus-4-6"
+  ],
+  "source": "manual",
+  "notes": "Rate limit hit detected by StopFailure hook. Window pct at throttle: 63%"
+}
+{
+  "user_id": "unknown",
+  "window_start": "2026-04-03T02:00:00.000Z",
+  "window_end": "",
+  "observed_at": "2026-04-03T08:17:40.000Z",
+  "tokens_consumed": 39278158,
+  "cost_equiv": 27.537574749999997,
+  "remaining_min": 0,
+  "throttled": true,
+  "peak_hour": false,
+  "promo_active": false,
+  "model_mix": [
+    "claude-opus-4-6"
+  ],
+  "source": "manual",
+  "notes": "Rate limit hit detected by StopFailure hook. Window pct at throttle: 63%"
+}
+{
+  "user_id": "unknown",
+  "window_start": "2026-04-03T02:00:00.000Z",
+  "window_end": "",
+  "observed_at": "2026-04-03T08:20:15.000Z",
+  "tokens_consumed": 39278158,
+  "cost_equiv": 27.537574749999997,
+  "remaining_min": 0,
+  "throttled": true,
+  "peak_hour": false,
+  "promo_active": false,
+  "model_mix": [
+    "claude-opus-4-6"
+  ],
+  "source": "manual",
+  "notes": "Rate limit hit detected by StopFailure hook. Window pct at throttle: 63%"
+}
+{
+  "user_id": "unknown",
+  "window_start": "2026-04-03T02:00:00.000Z",
+  "window_end": "",
+  "observed_at": "2026-04-03T08:20:16.000Z",
+  "tokens_consumed": 39278158,
+  "cost_equiv": 27.537574749999997,
+  "remaining_min": 0,
+  "throttled": true,
+  "peak_hour": false,
+  "promo_active": false,
+  "model_mix": [
+    "claude-opus-4-6"
+  ],
+  "source": "manual",
+  "notes": "Rate limit hit detected by StopFailure hook. Window pct at throttle: 63%"
+}
+{
+  "user_id": "unknown",
+  "window_start": "2026-04-03T02:00:00.000Z",
+  "window_end": "",
+  "observed_at": "2026-04-03T08:20:16.000Z",
+  "tokens_consumed": 39278158,
+  "cost_equiv": 27.537574749999997,
+  "remaining_min": 0,
+  "throttled": true,
+  "peak_hour": false,
+  "promo_active": false,
+  "model_mix": [
+    "claude-opus-4-6"
+  ],
+  "source": "manual",
+  "notes": "Rate limit hit detected by StopFailure hook. Window pct at throttle: 63%"
+}
+{
+  "user_id": "unknown",
+  "window_start": "2026-04-03T02:00:00.000Z",
+  "window_end": "",
+  "observed_at": "2026-04-03T08:20:16.000Z",
+  "tokens_consumed": 39278158,
+  "cost_equiv": 27.537574749999997,
+  "remaining_min": 0,
+  "throttled": true,
+  "peak_hour": false,
+  "promo_active": false,
+  "model_mix": [
+    "claude-opus-4-6"
+  ],
+  "source": "manual",
+  "notes": "Rate limit hit detected by StopFailure hook. Window pct at throttle: 63%"
+}
+{
+  "user_id": "unknown",
+  "window_start": "2026-04-03T02:00:00.000Z",
+  "window_end": "",
+  "observed_at": "2026-04-03T08:20:50.000Z",
+  "tokens_consumed": 39278158,
+  "cost_equiv": 27.537574749999997,
+  "remaining_min": 0,
+  "throttled": true,
+  "peak_hour": false,
+  "promo_active": false,
+  "model_mix": [
+    "claude-opus-4-6"
+  ],
+  "source": "manual",
+  "notes": "Rate limit hit detected by StopFailure hook. Window pct at throttle: 63%"
+}
+{
+  "user_id": "unknown",
+  "window_start": "2026-04-03T02:00:00.000Z",
+  "window_end": "",
+  "observed_at": "2026-04-03T08:21:06.000Z",
+  "tokens_consumed": 39278158,
+  "cost_equiv": 27.537574749999997,
+  "remaining_min": 0,
+  "throttled": true,
+  "peak_hour": false,
+  "promo_active": false,
+  "model_mix": [
+    "claude-opus-4-6"
+  ],
+  "source": "manual",
+  "notes": "Rate limit hit detected by StopFailure hook. Window pct at throttle: 63%"
+}
+{
+  "user_id": "unknown",
+  "window_start": "2026-04-03T02:00:00.000Z",
+  "window_end": "",
+  "observed_at": "2026-04-03T08:21:21.000Z",
+  "tokens_consumed": 39278158,
+  "cost_equiv": 27.537574749999997,
+  "remaining_min": 0,
+  "throttled": true,
+  "peak_hour": false,
+  "promo_active": false,
+  "model_mix": [
+    "claude-opus-4-6"
+  ],
+  "source": "manual",
+  "notes": "Rate limit hit detected by StopFailure hook. Window pct at throttle: 63%"
+}
+{"user_id":"unknown","window_start":"2026-04-03T07:00:00.000Z","window_end":"2026-04-03T12:00:00.000Z","observed_at":"2026-04-03T12:00:07.699Z","tokens_consumed":27155007,"cost_equiv":31.264469500000015,"remaining_min":null,"throttled":null,"peak_hour":false,"promo_active":false,"model_mix":["claude-opus-4-6","claude-sonnet-4-6"],"source":"ccusage-harvest","notes":"Auto-harvested from ccusage. 423 entries.","token_breakdown":{"input":110085,"output":93888,"cache_creation":3108144,"cache_read":23842890},"output_ratio":0.46029621567560414,"cache_hit_rate":0.8810755386722922}
+{
+  "user_id": "unknown",
+  "window_start": "2026-04-03T02:00:00.000Z",
+  "window_end": "",
+  "observed_at": "2026-04-03T12:23:13.000Z",
+  "tokens_consumed": 39278158,
+  "cost_equiv": 27.537574749999997,
+  "remaining_min": 0,
+  "throttled": true,
+  "peak_hour": false,
+  "promo_active": false,
+  "model_mix": [
+    "claude-opus-4-6"
+  ],
+  "source": "manual",
+  "notes": "Rate limit hit detected by StopFailure hook. Window pct at throttle: 63%"
+}
+{
+  "user_id": "unknown",
+  "window_start": "2026-04-03T02:00:00.000Z",
+  "window_end": "",
+  "observed_at": "2026-04-03T12:23:56.000Z",
+  "tokens_consumed": 39278158,
+  "cost_equiv": 27.537574749999997,
+  "remaining_min": 0,
+  "throttled": true,
+  "peak_hour": false,
+  "promo_active": false,
+  "model_mix": [
+    "claude-opus-4-6"
+  ],
+  "source": "manual",
+  "notes": "Rate limit hit detected by StopFailure hook. Window pct at throttle: 63%"
+}
+{
+  "user_id": "unknown",
+  "window_start": "2026-04-03T02:00:00.000Z",
+  "window_end": "",
+  "observed_at": "2026-04-03T12:24:12.000Z",
+  "tokens_consumed": 39278158,
+  "cost_equiv": 27.537574749999997,
+  "remaining_min": 0,
+  "throttled": true,
+  "peak_hour": false,
+  "promo_active": false,
+  "model_mix": [
+    "claude-opus-4-6"
+  ],
+  "source": "manual",
+  "notes": "Rate limit hit detected by StopFailure hook. Window pct at throttle: 63%"
+}
+{"user_id":"unknown","window_start":"2026-04-03T12:00:00.000Z","window_end":"2026-04-03T17:00:00.000Z","observed_at":"2026-04-03T17:00:07.485Z","tokens_consumed":4558388,"cost_equiv":13.053758749999997,"remaining_min":null,"throttled":null,"peak_hour":true,"promo_active":false,"model_mix":["claude-opus-4-6"],"source":"ccusage-harvest","notes":"Auto-harvested from ccusage. 115 entries.","token_breakdown":{"input":183,"output":61146,"cache_creation":1613159,"cache_read":2883900},"output_ratio":0.9970160935283471,"cache_hit_rate":0.6412596876040916}
