@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { QueuedTask, TaskSize } from "./types.ts";
 
 // Mock all I/O dependencies before importing runner
@@ -10,6 +10,15 @@ vi.mock("./scheduler.ts", async (importOriginal) => {
 	return { ...actual, shouldSchedule: vi.fn() };
 });
 vi.mock("node:child_process");
+vi.mock("node:fs/promises", async (importOriginal) => {
+	const actual = await importOriginal<typeof import("node:fs/promises")>();
+	return {
+		...actual,
+		readFile: vi.fn().mockRejectedValue(new Error("ENOENT")),
+		writeFile: vi.fn().mockResolvedValue(undefined),
+		mkdir: vi.fn().mockResolvedValue(undefined),
+	};
+});
 
 import { spawn } from "node:child_process";
 import { fetchBlocks } from "./ccusage.ts";
@@ -20,7 +29,7 @@ import {
 	updateEvent,
 } from "./gcal.ts";
 import { completeTask, failTask, nextTask, startTask } from "./queue.ts";
-import { run } from "./runner.ts";
+import { isHookOnlyFailure, run } from "./runner.ts";
 import { shouldSchedule } from "./scheduler.ts";
 
 const makeTask = (overrides: Partial<QueuedTask> = {}): QueuedTask => ({
@@ -77,8 +86,44 @@ function mockSpawnFailing() {
 	});
 }
 
+describe("isHookOnlyFailure", () => {
+	it("returns true for hook cancelled messages", () => {
+		expect(
+			isHookOnlyFailure(
+				"SessionEnd hook [bash /home/karl/.claude/hooks/session-end-snapshot.sh] failed: Hook cancelled\n",
+			),
+		).toBe(true);
+	});
+
+	it("returns true for multiple hook failures", () => {
+		const stderr = [
+			"SessionEnd hook [bash /path/hook1.sh] failed: Hook cancelled",
+			"PostToolUse hook [bash /path/hook2.sh] failed: timeout",
+		].join("\n");
+		expect(isHookOnlyFailure(stderr)).toBe(true);
+	});
+
+	it("returns false for real errors", () => {
+		expect(isHookOnlyFailure("Error: rate limit exceeded")).toBe(false);
+	});
+
+	it("returns false for mixed hook and real errors", () => {
+		const stderr = [
+			"SessionEnd hook [bash /path/hook.sh] failed: Hook cancelled",
+			"Error: something else went wrong",
+		].join("\n");
+		expect(isHookOnlyFailure(stderr)).toBe(false);
+	});
+
+	it("returns false for empty stderr", () => {
+		expect(isHookOnlyFailure("")).toBe(false);
+		expect(isHookOnlyFailure("  \n  ")).toBe(false);
+	});
+});
+
 describe("runner", () => {
 	beforeEach(() => {
+		vi.useFakeTimers();
 		vi.resetAllMocks();
 
 		// Re-establish all mock defaults after reset
@@ -99,6 +144,10 @@ describe("runner", () => {
 			reason: "test",
 		});
 		mockSpawnSucceeding();
+	});
+
+	afterEach(() => {
+		vi.useRealTimers();
 	});
 
 	it("returns scheduler decision when not schedule", async () => {
@@ -200,7 +249,9 @@ describe("runner", () => {
 			return child as unknown as ReturnType<typeof spawn>;
 		});
 
-		const result = await run(defaultOpts);
+		const resultP = run(defaultOpts);
+		await vi.advanceTimersByTimeAsync(120_000);
+		const result = await resultP;
 
 		expect(result.tasks).toHaveLength(2);
 		expect(result.tasks[0].success).toBe(false);
@@ -226,7 +277,9 @@ describe("runner", () => {
 
 		mockSpawnFailing();
 
-		const result = await run(defaultOpts);
+		const resultP = run(defaultOpts);
+		await vi.advanceTimersByTimeAsync(300_000);
+		const result = await resultP;
 
 		// Should fail 3 tasks (MAX_CONSECUTIVE_FAILURES = 3), then stop
 		expect(result.tasks).toHaveLength(3);
@@ -268,7 +321,9 @@ describe("runner", () => {
 			return child as unknown as ReturnType<typeof spawn>;
 		});
 
-		const result = await run(defaultOpts);
+		const resultP = run(defaultOpts);
+		await vi.advanceTimersByTimeAsync(600_000);
+		const result = await resultP;
 
 		// fail, fail, succeed (reset), fail, fail — 5 total
 		expect(result.tasks).toHaveLength(5);
@@ -302,6 +357,66 @@ describe("runner", () => {
 
 		expect(result.tasks).toHaveLength(1);
 		expect(result.tasks[0].taskId).toBe("t1");
+	});
+
+	it("treats hook-only failure as success when stdout has content", async () => {
+		vi.mocked(nextTask)
+			.mockResolvedValueOnce(makeTask())
+			.mockResolvedValue(null);
+
+		const EventEmitter = require("node:events");
+		const { PassThrough } = require("node:stream");
+		vi.mocked(spawn).mockImplementation(() => {
+			const child = new EventEmitter();
+			child.stdout = new PassThrough();
+			child.stderr = new PassThrough();
+			child.kill = vi.fn();
+			process.nextTick(() => {
+				child.stdout.write("Review complete. Report written.");
+				child.stdout.end();
+				child.stderr.write(
+					"SessionEnd hook [bash /home/karl/.claude/hooks/session-end-snapshot.sh] failed: Hook cancelled\n",
+				);
+				child.stderr.end();
+				child.emit("close", 1);
+			});
+			return child as unknown as ReturnType<typeof spawn>;
+		});
+
+		const result = await run(defaultOpts);
+		expect(result.tasks).toHaveLength(1);
+		expect(result.tasks[0].success).toBe(true);
+		expect(completeTask).toHaveBeenCalled();
+	});
+
+	it("treats non-hook failure as failure even with stdout", async () => {
+		vi.mocked(nextTask)
+			.mockResolvedValueOnce(makeTask())
+			.mockResolvedValue(null);
+
+		const EventEmitter = require("node:events");
+		const { PassThrough } = require("node:stream");
+		vi.mocked(spawn).mockImplementation(() => {
+			const child = new EventEmitter();
+			child.stdout = new PassThrough();
+			child.stderr = new PassThrough();
+			child.kill = vi.fn();
+			process.nextTick(() => {
+				child.stdout.write("partial output");
+				child.stdout.end();
+				child.stderr.write("Error: rate limit exceeded\n");
+				child.stderr.end();
+				child.emit("close", 1);
+			});
+			return child as unknown as ReturnType<typeof spawn>;
+		});
+
+		const resultP = run(defaultOpts);
+		await vi.advanceTimersByTimeAsync(120_000);
+		const result = await resultP;
+		expect(result.tasks).toHaveLength(1);
+		expect(result.tasks[0].success).toBe(false);
+		expect(failTask).toHaveBeenCalled();
 	});
 
 	it("dry run returns without executing", async () => {

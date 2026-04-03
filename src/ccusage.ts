@@ -25,8 +25,8 @@ export interface FetchBlocksOptions {
 function defaultExec(): Promise<string> {
 	return new Promise((resolve, reject) => {
 		execFile(
-			"npx",
-			["ccusage@latest", "blocks", "--json", "--offline"],
+			"ccusage",
+			["blocks", "--json", "--offline"],
 			{ maxBuffer: 10 * 1024 * 1024 },
 			(error, stdout, stderr) => {
 				if (error) {

@@ -33,6 +33,7 @@ Usage:
   phyllis weekly [--log <path>]
   phyllis queue list [--queue <path>]
   phyllis queue add --name <n> --size <S|M|L|XL> --prompt <p> --dir <d> [--priority <n>]
+  phyllis queue angel --dir <d> [--priority <n>] [--queue <path>]
   phyllis run [--queue <path>] [--dry-run]
   phyllis calendar setup
   phyllis calendar list [--hours <n>]
@@ -243,8 +244,8 @@ async function runAnalyze(parsed: ParsedArgs): Promise<void> {
 		const { execFile } = await import("node:child_process");
 		const stdout = await new Promise<string>((resolve, reject) => {
 			execFile(
-				"npx",
-				["ccusage@latest", "session", "--json", "--offline"],
+				"ccusage",
+				["session", "--json", "--offline"],
 				{ maxBuffer: 10 * 1024 * 1024 },
 				(error, stdout, _stderr) => {
 					if (error) {
@@ -297,6 +298,28 @@ async function runQueue(parsed: ParsedArgs): Promise<void> {
 				`  [${status}] ${t.name} (${t.size}, p${t.priority}) — ${t.status}`,
 			);
 		}
+		return;
+	}
+
+	if (subcommand === "angel") {
+		const { taskDir, taskPriority } = parsed;
+		if (!taskDir) {
+			console.error("queue angel requires --dir");
+			process.exit(1);
+		}
+		const projectName = taskDir.split("/").pop() ?? "unknown";
+		const reportPath = `/tmp/angel-${projectName.toLowerCase()}.md`;
+		const prompt = `Read ~/.claude/skills/angel/unattended.md and follow it exactly.\nPROJECT_DIR: ${taskDir}\nREPORT_PATH: ${reportPath}\nPERSONAS: all 9`;
+		const task = await addTask(queuePath, {
+			name: `NineAngel: ${projectName} full review`,
+			description: `NineAngel: ${projectName} full review`,
+			size: "L" as TaskSize,
+			prompt,
+			project_dir: taskDir,
+			priority: taskPriority ?? 20,
+		});
+		console.log(`queued: ${task.name} (${task.id})`);
+		console.log(`  report → ${reportPath}`);
 		return;
 	}
 
@@ -375,7 +398,13 @@ async function runScheduler(parsed: ParsedArgs): Promise<void> {
 		for (const t of result.tasks) {
 			const dur = Math.round(t.durationMs / 1000);
 			const status = t.success ? "done" : "FAILED";
-			console.log(`${prefix}${status}: ${t.taskName} (${dur}s) — ${t.reason}`);
+			const window =
+				t.windowBefore && t.windowAfter
+					? ` [5h: ${t.windowBefore.fiveHourPct ?? "?"}→${t.windowAfter.fiveHourPct ?? "?"}%, 7d: ${t.windowBefore.sevenDayPct ?? "?"}→${t.windowAfter.sevenDayPct ?? "?"}%]`
+					: "";
+			console.log(
+				`${prefix}${status}: ${t.taskName} (${dur}s) — ${t.reason}${window}`,
+			);
 		}
 		console.log(`${prefix}${result.reason}`);
 	}

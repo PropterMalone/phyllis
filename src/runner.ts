@@ -27,12 +27,21 @@ export interface RunnerOptions {
 	dryRun?: boolean;
 }
 
+export interface WindowSnapshot {
+	fiveHourPct: number | null;
+	sevenDayPct: number | null;
+	blockTokens: number | null;
+	blockCost: number | null;
+}
+
 export interface TaskOutcome {
 	taskId: string;
 	taskName: string;
 	success: boolean;
 	durationMs: number;
 	reason: string;
+	windowBefore: WindowSnapshot | null;
+	windowAfter: WindowSnapshot | null;
 }
 
 export interface RunnerResult {
@@ -56,6 +65,9 @@ export const SIZE_TIMEOUT_MS: Record<TaskSize, number> = {
 
 // Max consecutive failures before giving up for this invocation
 const MAX_CONSECUTIVE_FAILURES = 3;
+
+// Backoff after a failure — let rate limits clear before retrying
+const FAILURE_BACKOFF_MS = 60 * 1000;
 
 async function readRateLimits(): Promise<RateLimitState | null> {
 	try {
@@ -97,6 +109,32 @@ async function getActiveBlock(): Promise<CcusageBlock | null> {
 	} catch {
 		return null;
 	}
+}
+
+async function captureWindowSnapshot(): Promise<WindowSnapshot> {
+	const [limits, block] = await Promise.all([
+		readRateLimits(),
+		getActiveBlock(),
+	]);
+	return {
+		fiveHourPct: limits?.fiveHourPct ?? null,
+		sevenDayPct: limits?.sevenDayPct ?? null,
+		blockTokens: block?.totalTokens ?? null,
+		blockCost: block?.costUSD ?? null,
+	};
+}
+
+// Detect stderr that only contains hook failure messages, not real errors.
+// Claude Code prints lines like:
+//   SessionEnd hook [bash /path/to/hook.sh] failed: Hook cancelled
+//   PreToolUse hook [...] failed: ...
+export function isHookOnlyFailure(stderr: string): boolean {
+	const lines = stderr
+		.trim()
+		.split("\n")
+		.filter((l) => l.trim().length > 0);
+	if (lines.length === 0) return false;
+	return lines.every((line) => /hook\s+\[.*\]\s+failed:/i.test(line));
 }
 
 function runClaude(
@@ -148,6 +186,13 @@ function runClaude(
 		child.on("close", (code) => {
 			clearTimeout(timer);
 			if (code !== 0) {
+				// Hook failures (e.g. SessionEnd timeout) cause non-zero exit even
+				// when the actual work completed. If stdout has content and stderr
+				// only contains hook failure messages, treat as success.
+				if (stdout.length > 0 && isHookOnlyFailure(stderr)) {
+					resolve({ stdout, stderr });
+					return;
+				}
 				reject(
 					new Error(
 						`claude -p exited with code ${code}\n---STDERR---\n${stderr}`,
@@ -163,6 +208,21 @@ function runClaude(
 			reject(new Error(`claude -p failed to start: ${err.message}`));
 		});
 	});
+}
+
+function formatWindowDelta(
+	before: WindowSnapshot,
+	after: WindowSnapshot,
+): string {
+	const fmt = (v: number | null) => (v != null ? String(v) : "?");
+	const delta = (a: number | null, b: number | null) =>
+		a != null && b != null ? `(+${(b - a).toFixed(1)})` : "";
+	return [
+		`5h window: ${fmt(before.fiveHourPct)}% → ${fmt(after.fiveHourPct)}% ${delta(before.fiveHourPct, after.fiveHourPct)}`,
+		`7d window: ${fmt(before.sevenDayPct)}% → ${fmt(after.sevenDayPct)}% ${delta(before.sevenDayPct, after.sevenDayPct)}`,
+		`block tokens: ${fmt(before.blockTokens)} → ${fmt(after.blockTokens)} ${delta(before.blockTokens, after.blockTokens)}`,
+		`block cost: $${fmt(before.blockCost)} → $${fmt(after.blockCost)} ${delta(before.blockCost, after.blockCost)}`,
+	].join("\n");
 }
 
 async function writeTaskLog(
@@ -194,6 +254,7 @@ async function executeTask(
 	},
 ): Promise<TaskOutcome> {
 	const startMs = Date.now();
+	const windowBefore = await captureWindowSnapshot();
 	await startTask(queuePath, task.id);
 
 	let calendarId: string | null = null;
@@ -223,13 +284,14 @@ async function executeTask(
 		);
 		const summary = stdout.slice(0, 500);
 		const durationMs = Date.now() - startMs;
+		const windowAfter = await captureWindowSnapshot();
 		await completeTask(queuePath, task.id, summary);
 
-		// Log full output for posterity
+		// Log full output with window consumption data
 		await writeTaskLog(
 			task.id,
 			task.name,
-			`TASK: ${task.name}\nSIZE: ${task.size}\nDIR: ${task.project_dir}\nDURATION: ${Math.round(durationMs / 1000)}s\nSTATUS: done\n\n---PROMPT---\n${task.prompt}\n\n---STDOUT---\n${stdout}\n\n---STDERR---\n${stderr}`,
+			`TASK: ${task.name}\nSIZE: ${task.size}\nDIR: ${task.project_dir}\nDURATION: ${Math.round(durationMs / 1000)}s\nSTATUS: done\n\n---WINDOW---\n${formatWindowDelta(windowBefore, windowAfter)}\n\n---PROMPT---\n${task.prompt}\n\n---STDOUT---\n${stdout}\n\n---STDERR---\n${stderr}`,
 		);
 
 		if (calendarId && eventId) {
@@ -250,17 +312,24 @@ async function executeTask(
 			success: true,
 			durationMs,
 			reason: "completed",
+			windowBefore,
+			windowAfter,
 		};
 	} catch (err) {
 		const errMsg = (err as Error).message;
 		const durationMs = Date.now() - startMs;
+		const windowAfter = await captureWindowSnapshot();
+		const fastDeath = durationMs < 30_000;
+		const failReason = fastDeath
+			? `fast failure (${Math.round(durationMs / 1000)}s) — likely rate-limited: ${errMsg.slice(0, 80)}`
+			: `failed: ${errMsg.slice(0, 100)}`;
 		await failTask(queuePath, task.id, errMsg.slice(0, 500));
 
-		// Log full error for debugging
+		// Log full error with window state for debugging
 		await writeTaskLog(
 			task.id,
 			task.name,
-			`TASK: ${task.name}\nSIZE: ${task.size}\nDIR: ${task.project_dir}\nDURATION: ${Math.round(durationMs / 1000)}s\nSTATUS: failed\n\n---PROMPT---\n${task.prompt}\n\n---ERROR---\n${errMsg}`,
+			`TASK: ${task.name}\nSIZE: ${task.size}\nDIR: ${task.project_dir}\nDURATION: ${Math.round(durationMs / 1000)}s\nSTATUS: failed${fastDeath ? " (FAST DEATH)" : ""}\n\n---WINDOW---\n${formatWindowDelta(windowBefore, windowAfter)}\n\n---PROMPT---\n${task.prompt}\n\n---ERROR---\n${errMsg}`,
 		);
 
 		if (calendarId && eventId) {
@@ -280,7 +349,9 @@ async function executeTask(
 			taskName: task.name,
 			success: false,
 			durationMs,
-			reason: `failed: ${errMsg.slice(0, 100)}`,
+			reason: failReason,
+			windowBefore,
+			windowAfter,
 		};
 	}
 }
@@ -340,6 +411,8 @@ export async function run(options: RunnerOptions): Promise<RunnerResult> {
 					success: false,
 					durationMs: 0,
 					reason: "dry run",
+					windowBefore: null,
+					windowAfter: null,
 				},
 			],
 			dryRun: true,
@@ -369,6 +442,9 @@ async function drainQueue(
 			if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
 				break;
 			}
+			// Back off before retrying — instant retries after rate-limit failures
+			// just burn through the failure budget without giving the limit time to clear
+			await new Promise((r) => setTimeout(r, FAILURE_BACKOFF_MS));
 		}
 
 		// Check if we should keep going
