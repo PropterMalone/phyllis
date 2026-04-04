@@ -6,6 +6,7 @@ import {
 	addTask,
 	completeTask,
 	failTask,
+	findTasksByPattern,
 	listTasks,
 	nextTask,
 	startTask,
@@ -154,6 +155,70 @@ describe("task lifecycle", () => {
 			expect(failed.status).toBe("failed");
 			expect(failed.completed_at).toBeTruthy();
 			expect(failed.result_summary).toBe("claude -p exited with code 1");
+		});
+	});
+});
+
+describe("findTasksByPattern", () => {
+	it("matches exact name", async () => {
+		await withTmpQueue(async (queuePath) => {
+			await addTask(queuePath, baseTask);
+			const matches = await findTasksByPattern(queuePath, "NineAngel full run");
+			expect(matches).toHaveLength(1);
+			expect(matches[0].name).toBe("NineAngel full run");
+		});
+	});
+
+	it("matches substring", async () => {
+		await withTmpQueue(async (queuePath) => {
+			await addTask(queuePath, baseTask);
+			await addTask(queuePath, { ...baseTask, name: "3CB resolution" });
+			const matches = await findTasksByPattern(queuePath, "angel");
+			expect(matches).toHaveLength(1);
+			expect(matches[0].name).toBe("NineAngel full run");
+		});
+	});
+
+	it("matches case-insensitively", async () => {
+		await withTmpQueue(async (queuePath) => {
+			await addTask(queuePath, baseTask);
+			const matches = await findTasksByPattern(queuePath, "nineangel");
+			expect(matches).toHaveLength(1);
+			expect(matches[0].name).toBe("NineAngel full run");
+		});
+	});
+
+	it("returns empty array for no match", async () => {
+		await withTmpQueue(async (queuePath) => {
+			await addTask(queuePath, baseTask);
+			const matches = await findTasksByPattern(queuePath, "nonexistent");
+			expect(matches).toEqual([]);
+		});
+	});
+
+	it("only returns queued tasks", async () => {
+		await withTmpQueue(async (queuePath) => {
+			const t1 = await addTask(queuePath, baseTask);
+			await addTask(queuePath, {
+				...baseTask,
+				name: "NineAngel partial run",
+			});
+			await startTask(queuePath, t1.id);
+			await completeTask(queuePath, t1.id, "done");
+
+			const matches = await findTasksByPattern(queuePath, "angel");
+			expect(matches).toHaveLength(1);
+			expect(matches[0].name).toBe("NineAngel partial run");
+		});
+	});
+
+	it("matches by exact task ID", async () => {
+		await withTmpQueue(async (queuePath) => {
+			const t = await addTask(queuePath, baseTask);
+			await addTask(queuePath, { ...baseTask, name: "other task" });
+			const matches = await findTasksByPattern(queuePath, t.id);
+			expect(matches).toHaveLength(1);
+			expect(matches[0].id).toBe(t.id);
 		});
 	});
 });

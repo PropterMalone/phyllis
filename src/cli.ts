@@ -24,7 +24,12 @@ import {
 } from "./gcal.ts";
 import { harvest, snapshot } from "./harvest.ts";
 import { startProxy } from "./proxy.ts";
-import { addTask, listTasks } from "./queue.ts";
+import {
+	addTask,
+	completeTask,
+	findTasksByPattern,
+	listTasks,
+} from "./queue.ts";
 import { run } from "./runner.ts";
 import type { CalibrationEntry, TaskSize } from "./types.ts";
 import { buildWeeklySummary, renderWeeklySummary } from "./weekly.ts";
@@ -39,7 +44,8 @@ Usage:
   phyllis analyze [--log <path>] [--metric <tokens|cost>]
   phyllis weekly [--log <path>]
   phyllis queue list [--queue <path>]
-  phyllis queue add --name <n> --size <S|M|L|XL> --prompt <p> --dir <d> [--priority <n>]
+  phyllis queue add --name <n> --size <S|M|L|XL> --prompt <p> --dir <d> [--priority <n>] [--preflight <cmd>]
+  phyllis queue done <name-or-id>
   phyllis queue angel --dir <d> [--priority <n>] [--queue <path>]
   phyllis run [--queue <path>] [--dry-run]
   phyllis proxy [--port 7735] [--log <path>]
@@ -89,7 +95,9 @@ interface ParsedArgs {
 	taskPrompt?: string;
 	taskDir?: string;
 	taskPriority?: number;
+	taskPreflight?: string;
 	subcommand?: string;
+	taskPattern?: string;
 	hours?: number;
 	proxyPort?: number;
 }
@@ -124,6 +132,8 @@ function parseArgs(argv: string[]): ParsedArgs {
 	let taskPrompt: string | undefined;
 	let taskDir: string | undefined;
 	let taskPriority: number | undefined;
+	let taskPreflight: string | undefined;
+	let taskPattern: string | undefined;
 	let hours: number | undefined;
 	let proxyPort: number | undefined;
 
@@ -136,6 +146,16 @@ function parseArgs(argv: string[]): ParsedArgs {
 	) {
 		subcommand = args[1];
 		startIdx = 2;
+		// "queue done <pattern>" — capture the positional arg
+		if (
+			command === "queue" &&
+			subcommand === "done" &&
+			args[2] &&
+			!args[2].startsWith("--")
+		) {
+			taskPattern = args[2];
+			startIdx = 3;
+		}
 	}
 
 	for (let i = startIdx; i < args.length; i++) {
@@ -173,6 +193,9 @@ function parseArgs(argv: string[]): ParsedArgs {
 			case "--priority":
 				taskPriority = Number(args[++i]);
 				break;
+			case "--preflight":
+				taskPreflight = args[++i];
+				break;
 			case "--hours":
 				hours = Number(args[++i]);
 				break;
@@ -198,6 +221,8 @@ function parseArgs(argv: string[]): ParsedArgs {
 		taskPrompt,
 		taskDir,
 		taskPriority,
+		taskPreflight,
+		taskPattern,
 		hours,
 		proxyPort,
 	};
@@ -324,6 +349,36 @@ async function runQueue(parsed: ResolvedArgs): Promise<void> {
 		return;
 	}
 
+	if (subcommand === "done") {
+		const pattern = parsed.taskPattern;
+		if (!pattern) {
+			console.error("queue done requires a task name or ID");
+			process.exit(1);
+		}
+		const matches = await findTasksByPattern(queuePath, pattern);
+		if (matches.length === 0) {
+			console.error(`no queued task matching '${pattern}'`);
+			process.exit(1);
+		}
+		if (matches.length > 1) {
+			console.error(
+				`multiple queued tasks match '${pattern}' — be more specific:`,
+			);
+			for (const t of matches) {
+				console.error(`  ${t.name} (${t.id})`);
+			}
+			process.exit(1);
+		}
+		const task = matches[0];
+		await completeTask(
+			queuePath,
+			task.id,
+			"manually completed (interactive session)",
+		);
+		console.log(`done: ${task.name} (${task.id})`);
+		return;
+	}
+
 	if (subcommand === "angel") {
 		const { taskDir, taskPriority } = parsed;
 		if (!taskDir) {
@@ -347,7 +402,14 @@ async function runQueue(parsed: ResolvedArgs): Promise<void> {
 	}
 
 	if (subcommand === "add") {
-		const { taskName, taskSize, taskPrompt, taskDir, taskPriority } = parsed;
+		const {
+			taskName,
+			taskSize,
+			taskPrompt,
+			taskDir,
+			taskPriority,
+			taskPreflight,
+		} = parsed;
 		if (!taskName || !taskSize || !taskPrompt || !taskDir) {
 			console.error("queue add requires --name, --size, --prompt, and --dir");
 			process.exit(1);
@@ -359,6 +421,7 @@ async function runQueue(parsed: ResolvedArgs): Promise<void> {
 			prompt: taskPrompt,
 			project_dir: taskDir,
 			priority: taskPriority ?? 10,
+			preflight: taskPreflight,
 		});
 		console.log(`added task: ${task.name} (${task.id})`);
 		return;

@@ -1,7 +1,7 @@
 // pattern: imperative-shell
 // Cron entry point: check window state, drain queue within the current window
 
-import { type ChildProcess, spawn } from "node:child_process";
+import { type ChildProcess, execSync, spawn } from "node:child_process";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fetchBlocks } from "./ccusage.ts";
@@ -281,6 +281,19 @@ interface RuntimePaths {
 	docketReservations: string | null;
 }
 
+function runPreflight(command: string, projectDir: string): "skip" | "proceed" {
+	try {
+		execSync(command, {
+			cwd: projectDir,
+			timeout: 10_000,
+			stdio: "ignore",
+		});
+		return "skip";
+	} catch {
+		return "proceed";
+	}
+}
+
 async function executeTask(
 	queuePath: string,
 	task: {
@@ -291,10 +304,41 @@ async function executeTask(
 		description: string;
 		prompt: string;
 		project_dir: string;
+		preflight?: string;
 	},
 	runtimePaths: RuntimePaths,
 ): Promise<TaskOutcome> {
 	const startMs = Date.now();
+
+	if (task.preflight) {
+		const preflightResult = runPreflight(task.preflight, task.project_dir);
+		if (preflightResult === "skip") {
+			await completeTask(queuePath, task.id, "preflight: already completed");
+			const durationMs = Date.now() - startMs;
+			await writeTaskLog(
+				runtimePaths.taskLogs,
+				task.id,
+				task.name,
+				`TASK: ${task.name}\nSIZE: ${task.size}\nDIR: ${task.project_dir}\nDURATION: ${Math.round(durationMs / 1000)}s\nSTATUS: skipped (preflight)\n\n---PREFLIGHT---\n${task.preflight}\nResult: exit 0 — work already done`,
+			);
+			return {
+				taskId: task.id,
+				taskName: task.name,
+				success: true,
+				durationMs,
+				reason: "preflight: already completed",
+				windowBefore: null,
+				windowAfter: null,
+			};
+		}
+		await writeTaskLog(
+			runtimePaths.taskLogs,
+			task.id,
+			task.name,
+			`PREFLIGHT: ${task.preflight}\nResult: non-zero — proceeding with execution`,
+		);
+	}
+
 	const windowBefore = await captureWindowSnapshot(
 		runtimePaths.windowState,
 		runtimePaths.rateLimits,

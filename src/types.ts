@@ -135,6 +135,7 @@ export interface QueuedTask {
 	started_at?: string;
 	completed_at?: string;
 	result_summary?: string;
+	preflight?: string;
 }
 
 // Calendar event representing a Phyllis-scheduled task

@@ -20,7 +20,7 @@ vi.mock("node:fs/promises", async (importOriginal) => {
 	};
 });
 
-import { spawn } from "node:child_process";
+import { execSync, spawn } from "node:child_process";
 import { fetchBlocks } from "./ccusage.ts";
 import { defaultConfig } from "./config.ts";
 import {
@@ -432,5 +432,76 @@ describe("runner", () => {
 		expect(result.tasks).toHaveLength(1);
 		expect(spawn).not.toHaveBeenCalled();
 		expect(startTask).not.toHaveBeenCalled();
+	});
+
+	it("skips task when preflight exits 0", async () => {
+		vi.mocked(nextTask)
+			.mockResolvedValueOnce(
+				makeTask({ preflight: "test -f /tmp/already-done.md" }),
+			)
+			.mockResolvedValue(null);
+		vi.mocked(execSync).mockReturnValue(Buffer.from(""));
+
+		const result = await run(defaultOpts);
+
+		expect(result.tasks).toHaveLength(1);
+		expect(result.tasks[0].success).toBe(true);
+		expect(result.tasks[0].reason).toBe("preflight: already completed");
+		expect(spawn).not.toHaveBeenCalled();
+		expect(startTask).not.toHaveBeenCalled();
+		expect(completeTask).toHaveBeenCalledWith(
+			defaultOpts.queuePath,
+			"task-1",
+			"preflight: already completed",
+		);
+	});
+
+	it("proceeds to execution when preflight exits non-zero", async () => {
+		vi.mocked(nextTask)
+			.mockResolvedValueOnce(
+				makeTask({ preflight: "test -f /tmp/not-there.md" }),
+			)
+			.mockResolvedValue(null);
+		vi.mocked(execSync).mockImplementation(() => {
+			throw new Error("Command failed with exit code 1");
+		});
+
+		const result = await run(defaultOpts);
+
+		expect(result.tasks).toHaveLength(1);
+		expect(result.tasks[0].success).toBe(true);
+		expect(spawn).toHaveBeenCalled();
+		expect(startTask).toHaveBeenCalled();
+	});
+
+	it("proceeds to execution when task has no preflight", async () => {
+		vi.mocked(nextTask)
+			.mockResolvedValueOnce(makeTask())
+			.mockResolvedValue(null);
+
+		const result = await run(defaultOpts);
+
+		expect(result.tasks).toHaveLength(1);
+		expect(result.tasks[0].success).toBe(true);
+		expect(execSync).not.toHaveBeenCalled();
+		expect(spawn).toHaveBeenCalled();
+	});
+
+	it("proceeds to execution when preflight times out", async () => {
+		vi.mocked(nextTask)
+			.mockResolvedValueOnce(makeTask({ preflight: "sleep 30" }))
+			.mockResolvedValue(null);
+		vi.mocked(execSync).mockImplementation(() => {
+			const err = new Error("Command timed out");
+			(err as NodeJS.ErrnoException).code = "ETIMEDOUT";
+			throw err;
+		});
+
+		const result = await run(defaultOpts);
+
+		expect(result.tasks).toHaveLength(1);
+		expect(result.tasks[0].success).toBe(true);
+		expect(spawn).toHaveBeenCalled();
+		expect(startTask).toHaveBeenCalled();
 	});
 });

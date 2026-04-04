@@ -11,6 +11,7 @@ export interface AddTaskInput {
 	prompt: string;
 	project_dir: string;
 	priority: number;
+	preflight?: string;
 }
 
 async function readQueue(queuePath: string): Promise<QueuedTask[]> {
@@ -29,6 +30,17 @@ async function writeQueue(
 	await writeFile(queuePath, JSON.stringify(tasks, null, "\t"));
 }
 
+export async function findTasksByPattern(
+	queuePath: string,
+	pattern: string,
+): Promise<QueuedTask[]> {
+	const tasks = await listTasks(queuePath, "queued");
+	const idMatch = tasks.filter((t) => t.id === pattern);
+	if (idMatch.length > 0) return idMatch;
+	const lower = pattern.toLowerCase();
+	return tasks.filter((t) => t.name.toLowerCase().includes(lower));
+}
+
 export async function addTask(
 	queuePath: string,
 	input: AddTaskInput,
@@ -44,6 +56,7 @@ export async function addTask(
 		priority: input.priority,
 		created_at: new Date().toISOString(),
 		status: "queued",
+		...(input.preflight && { preflight: input.preflight }),
 	};
 	tasks.push(task);
 	await writeQueue(queuePath, tasks);
