@@ -52,7 +52,10 @@ export interface CalibrationEntry {
 		| "ccusage-harvest"
 		| "ccusage-snapshot"
 		| "session-end-hook"
-		| "manual";
+		| "manual"
+		| "proxy-reset"
+		| "proxy-threshold"
+		| "proxy-429";
 	notes: string;
 
 	// Block-level token breakdown
