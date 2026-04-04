@@ -11,22 +11,29 @@ import {
 	renderProjectTable,
 } from "./analyze.ts";
 import {
+	defaultConfig,
+	initHome,
+	loadConfig as loadPhyllisConfig,
+	type PhyllisConfig,
+	paths,
+} from "./config.ts";
+import {
 	getOrCreatePhyllisCalendar,
 	listUpcoming,
 	loadConfig,
 } from "./gcal.ts";
 import { harvest, snapshot } from "./harvest.ts";
+import { startProxy } from "./proxy.ts";
 import { addTask, listTasks } from "./queue.ts";
 import { run } from "./runner.ts";
 import type { CalibrationEntry, TaskSize } from "./types.ts";
 import { buildWeeklySummary, renderWeeklySummary } from "./weekly.ts";
 
-const DEFAULT_LOG_PATH = resolve(process.cwd(), "calibration-log.jsonl");
-
 function usage(): never {
 	console.error(`phyllis — Claude Code usage optimizer
 
 Usage:
+  phyllis init
   phyllis harvest [--user <id>] [--log <path>] [--dry-run]
   phyllis snapshot [--user <id>] [--log <path>] [--dry-run]
   phyllis analyze [--log <path>] [--metric <tokens|cost>]
@@ -35,42 +42,45 @@ Usage:
   phyllis queue add --name <n> --size <S|M|L|XL> --prompt <p> --dir <d> [--priority <n>]
   phyllis queue angel --dir <d> [--priority <n>] [--queue <path>]
   phyllis run [--queue <path>] [--dry-run]
+  phyllis proxy [--port 7735] [--log <path>]
   phyllis calendar setup
   phyllis calendar list [--hours <n>]
 
 Commands:
+  init      Create ~/.phyllis config and directory structure
   harvest   Process completed blocks into calibration entries
   snapshot  Capture the active block with projection data
   analyze   Show usage heatmap and project breakdown
   weekly    Show weekly summary with burn rate trends
   queue     Manage deferrable task queue
   run       Check window state and execute next queued task
+  proxy     Start rate-limit header capture proxy
   calendar  Manage Phyllis Google Calendar integration
 
 Options:
   --user <id>          User identifier (default: $USER or "unknown")
-  --log <path>         Path to calibration-log.jsonl (default: ./calibration-log.jsonl)
+  --log <path>         Path to calibration-log.jsonl (default: ~/.phyllis/calibration-log.jsonl)
   --dry-run            Print what would be appended without writing
   --metric <m>         Heatmap metric: tokens or cost (default: cost)`);
 	process.exit(1);
 }
 
 type Command =
+	| "init"
 	| "harvest"
 	| "snapshot"
 	| "analyze"
 	| "weekly"
 	| "queue"
 	| "run"
+	| "proxy"
 	| "calendar";
-
-const DEFAULT_QUEUE_PATH = resolve(process.cwd(), "queue.json");
 
 interface ParsedArgs {
 	command: Command;
-	userId: string;
-	logPath: string;
-	queuePath: string;
+	userId?: string;
+	logPath?: string;
+	queuePath?: string;
 	dryRun: boolean;
 	metric: "tokens" | "cost";
 	// queue add fields
@@ -81,15 +91,18 @@ interface ParsedArgs {
 	taskPriority?: number;
 	subcommand?: string;
 	hours?: number;
+	proxyPort?: number;
 }
 
 const VALID_COMMANDS = new Set([
+	"init",
 	"harvest",
 	"snapshot",
 	"analyze",
 	"weekly",
 	"queue",
 	"run",
+	"proxy",
 	"calendar",
 ]);
 
@@ -100,9 +113,9 @@ function parseArgs(argv: string[]): ParsedArgs {
 		usage();
 	}
 
-	let userId = process.env.USER ?? "unknown";
-	let logPath = DEFAULT_LOG_PATH;
-	let queuePath = DEFAULT_QUEUE_PATH;
+	let userId: string | undefined;
+	let logPath: string | undefined;
+	let queuePath: string | undefined;
 	let dryRun = false;
 	let metric: "tokens" | "cost" = "cost";
 	let subcommand: string | undefined;
@@ -112,6 +125,7 @@ function parseArgs(argv: string[]): ParsedArgs {
 	let taskDir: string | undefined;
 	let taskPriority: number | undefined;
 	let hours: number | undefined;
+	let proxyPort: number | undefined;
 
 	// For "queue" and "calendar", first positional after command is the subcommand
 	let startIdx = 1;
@@ -162,6 +176,9 @@ function parseArgs(argv: string[]): ParsedArgs {
 			case "--hours":
 				hours = Number(args[++i]);
 				break;
+			case "--port":
+				proxyPort = Number(args[++i]);
+				break;
 			default:
 				console.error(`unknown option: ${args[i]}`);
 				usage();
@@ -182,6 +199,7 @@ function parseArgs(argv: string[]): ParsedArgs {
 		taskDir,
 		taskPriority,
 		hours,
+		proxyPort,
 	};
 }
 
@@ -202,8 +220,11 @@ async function readCalibrationLog(
 	return entries;
 }
 
-async function runHarvestOrSnapshot(parsed: ParsedArgs): Promise<void> {
-	const { command, userId, logPath, dryRun } = parsed;
+async function runHarvestOrSnapshot(parsed: ResolvedArgs): Promise<void> {
+	const command = parsed.command;
+	const userId = parsed.resolvedUserId;
+	const logPath = parsed.resolvedLogPath;
+	const { dryRun } = parsed;
 	const options = { logPath, userId, dryRun };
 
 	const result =
@@ -228,8 +249,9 @@ async function runHarvestOrSnapshot(parsed: ParsedArgs): Promise<void> {
 	}
 }
 
-async function runAnalyze(parsed: ParsedArgs): Promise<void> {
-	const { logPath, metric } = parsed;
+async function runAnalyze(parsed: ResolvedArgs): Promise<void> {
+	const { metric } = parsed;
+	const logPath = parsed.resolvedLogPath;
 
 	// Heatmap from calibration data
 	const entries = await readCalibrationLog(logPath);
@@ -268,15 +290,16 @@ async function runAnalyze(parsed: ParsedArgs): Promise<void> {
 	}
 }
 
-async function runWeekly(parsed: ParsedArgs): Promise<void> {
-	const entries = await readCalibrationLog(parsed.logPath);
+async function runWeekly(parsed: ResolvedArgs): Promise<void> {
+	const entries = await readCalibrationLog(parsed.resolvedLogPath);
 	const weeks = buildWeeklySummary(entries);
 	console.log(`\n  Weekly Summary (${entries.length} blocks)\n`);
 	console.log(renderWeeklySummary(weeks));
 }
 
-async function runQueue(parsed: ParsedArgs): Promise<void> {
-	const { queuePath, subcommand } = parsed;
+async function runQueue(parsed: ResolvedArgs): Promise<void> {
+	const queuePath = parsed.resolvedQueuePath;
+	const { subcommand } = parsed;
 
 	if (subcommand === "list" || !subcommand) {
 		const tasks = await listTasks(queuePath);
@@ -345,7 +368,7 @@ async function runQueue(parsed: ParsedArgs): Promise<void> {
 	usage();
 }
 
-async function runCalendar(parsed: ParsedArgs): Promise<void> {
+async function runCalendar(parsed: ResolvedArgs): Promise<void> {
 	const { subcommand } = parsed;
 
 	if (subcommand === "setup") {
@@ -384,11 +407,12 @@ async function runCalendar(parsed: ParsedArgs): Promise<void> {
 	process.exit(1);
 }
 
-async function runScheduler(parsed: ParsedArgs): Promise<void> {
+async function runScheduler(parsed: ResolvedArgs): Promise<void> {
 	const result = await run({
-		queuePath: parsed.queuePath,
-		logPath: parsed.logPath,
+		queuePath: parsed.resolvedQueuePath,
+		logPath: parsed.resolvedLogPath,
 		dryRun: parsed.dryRun,
+		config: parsed.config,
 	});
 
 	const prefix = result.dryRun ? "[dry-run] " : "";
@@ -410,27 +434,71 @@ async function runScheduler(parsed: ParsedArgs): Promise<void> {
 	}
 }
 
+interface ResolvedArgs extends ParsedArgs {
+	config: PhyllisConfig;
+	resolvedLogPath: string;
+	resolvedQueuePath: string;
+	resolvedUserId: string;
+}
+
+async function resolveArgs(parsed: ParsedArgs): Promise<ResolvedArgs> {
+	const config = await loadPhyllisConfig();
+	return {
+		...parsed,
+		config,
+		resolvedLogPath: parsed.logPath ?? config.logPath,
+		resolvedQueuePath: parsed.queuePath ?? config.queuePath,
+		resolvedUserId: parsed.userId ?? config.userId,
+	};
+}
+
 async function main(): Promise<void> {
 	const parsed = parseArgs(process.argv);
 
-	switch (parsed.command) {
+	// init doesn't need config loading
+	if (parsed.command === "init") {
+		const config = defaultConfig();
+		await initHome(config);
+		console.log(`initialized ${config.home}`);
+		console.log(`  config: ${config.home}/config.json`);
+		console.log(`  log:    ${config.logPath}`);
+		console.log(`  queue:  ${config.queuePath}`);
+		return;
+	}
+
+	const resolved = await resolveArgs(parsed);
+
+	switch (resolved.command) {
 		case "analyze":
-			await runAnalyze(parsed);
+			await runAnalyze(resolved);
 			break;
 		case "weekly":
-			await runWeekly(parsed);
+			await runWeekly(resolved);
 			break;
 		case "queue":
-			await runQueue(parsed);
+			await runQueue(resolved);
 			break;
 		case "calendar":
-			await runCalendar(parsed);
+			await runCalendar(resolved);
 			break;
 		case "run":
-			await runScheduler(parsed);
+			await runScheduler(resolved);
 			break;
+		case "proxy": {
+			const port = resolved.proxyPort ?? resolved.config.proxy.port;
+			const p = paths(resolved.config);
+			startProxy({
+				port,
+				logPath: resolved.resolvedLogPath,
+				statePath: p.windowState,
+			});
+			console.log(`phyllis proxy listening on http://127.0.0.1:${port}`);
+			console.log(`set ANTHROPIC_BASE_URL=http://127.0.0.1:${port}`);
+			await new Promise(() => {});
+			break;
+		}
 		default:
-			await runHarvestOrSnapshot(parsed);
+			await runHarvestOrSnapshot(resolved);
 	}
 }
 

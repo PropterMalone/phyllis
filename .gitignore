@@ -2,3 +2,5 @@ node_modules/
 dist/
 scheduler.log
 phyllis-calendar.json
+calibration-log.jsonl
+queue.json

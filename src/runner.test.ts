@@ -22,6 +22,7 @@ vi.mock("node:fs/promises", async (importOriginal) => {
 
 import { spawn } from "node:child_process";
 import { fetchBlocks } from "./ccusage.ts";
+import { defaultConfig } from "./config.ts";
 import {
 	checkBusy,
 	createEvent,
@@ -45,9 +46,12 @@ const makeTask = (overrides: Partial<QueuedTask> = {}): QueuedTask => ({
 	...overrides,
 });
 
+const testConfig = defaultConfig("/tmp/phyllis-test");
+
 const defaultOpts = {
 	queuePath: "/tmp/test-queue.json",
 	logPath: "/tmp/test-log.jsonl",
+	config: testConfig,
 };
 
 function mockSpawnSucceeding() {

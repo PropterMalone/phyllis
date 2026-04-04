@@ -5,6 +5,8 @@ import { type ChildProcess, spawn } from "node:child_process";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fetchBlocks } from "./ccusage.ts";
+import type { PhyllisConfig } from "./config.ts";
+import { paths } from "./config.ts";
 import {
 	checkBusy,
 	createEvent,
@@ -25,6 +27,7 @@ export interface RunnerOptions {
 	queuePath: string;
 	logPath: string;
 	dryRun?: boolean;
+	config: PhyllisConfig;
 }
 
 export interface WindowSnapshot {
@@ -51,9 +54,8 @@ export interface RunnerResult {
 	dryRun: boolean;
 }
 
-const RATE_LIMITS_CACHE = "/tmp/phyllis-rate-limits";
-const DOCKET_RESERVATIONS = `${process.env.HOME ?? "/home/karl"}/.docket/reservations.json`;
-const TASK_LOGS_DIR = `${process.env.HOME ?? "/home/karl"}/.phyllis/task-logs`;
+// Proxy state older than this is considered stale — fall back to statusline data
+const PROXY_STALENESS_MS = 10 * 60 * 1000;
 
 // Scale timeout by task size — L/XL tasks (NineAngel batteries, 3CB resolution) need more time
 export const SIZE_TIMEOUT_MS: Record<TaskSize, number> = {
@@ -69,9 +71,34 @@ const MAX_CONSECUTIVE_FAILURES = 3;
 // Backoff after a failure — let rate limits clear before retrying
 const FAILURE_BACKOFF_MS = 60 * 1000;
 
-async function readRateLimits(): Promise<RateLimitState | null> {
+async function readRateLimits(
+	windowStatePath: string,
+	rateLimitsPath: string,
+): Promise<RateLimitState | null> {
+	// Prefer proxy state (real-time utilization from HTTP headers)
 	try {
-		const content = await readFile(RATE_LIMITS_CACHE, "utf-8");
+		const content = await readFile(windowStatePath, "utf-8");
+		const state = JSON.parse(content) as {
+			capturedAt?: string;
+			fiveHourUtilization?: number | null;
+			sevenDayUtilization?: number | null;
+		};
+		if (state.capturedAt) {
+			const age = Date.now() - new Date(state.capturedAt).getTime();
+			if (age < PROXY_STALENESS_MS && state.fiveHourUtilization != null) {
+				return {
+					fiveHourPct: state.fiveHourUtilization * 100,
+					sevenDayPct: (state.sevenDayUtilization ?? 0) * 100,
+				};
+			}
+		}
+	} catch {
+		// fall through to statusline file
+	}
+
+	// Fallback: statusline script's rate-limit file
+	try {
+		const content = await readFile(rateLimitsPath, "utf-8");
 		const data = JSON.parse(content) as {
 			five_hour?: { used_percentage?: number };
 			seven_day?: { used_percentage?: number };
@@ -86,9 +113,11 @@ async function readRateLimits(): Promise<RateLimitState | null> {
 	}
 }
 
-async function readActiveReservation(): Promise<DocketReservation | null> {
+async function readActiveReservation(
+	reservationsPath: string,
+): Promise<DocketReservation | null> {
 	try {
-		const content = await readFile(DOCKET_RESERVATIONS, "utf-8");
+		const content = await readFile(reservationsPath, "utf-8");
 		const reservations = JSON.parse(content) as DocketReservation[];
 		const now = new Date().toISOString();
 		const fiveHoursLater = new Date(
@@ -111,9 +140,12 @@ async function getActiveBlock(): Promise<CcusageBlock | null> {
 	}
 }
 
-async function captureWindowSnapshot(): Promise<WindowSnapshot> {
+async function captureWindowSnapshot(
+	windowStatePath: string,
+	rateLimitsPath: string,
+): Promise<WindowSnapshot> {
 	const [limits, block] = await Promise.all([
-		readRateLimits(),
+		readRateLimits(windowStatePath, rateLimitsPath),
 		getActiveBlock(),
 	]);
 	return {
@@ -226,19 +258,27 @@ function formatWindowDelta(
 }
 
 async function writeTaskLog(
+	taskLogsDir: string,
 	_taskId: string,
 	taskName: string,
 	content: string,
 ): Promise<void> {
 	try {
-		await mkdir(TASK_LOGS_DIR, { recursive: true });
+		await mkdir(taskLogsDir, { recursive: true });
 		const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
 		const safeName = taskName.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 60);
 		const filename = `${timestamp}_${safeName}.log`;
-		await writeFile(join(TASK_LOGS_DIR, filename), content);
+		await writeFile(join(taskLogsDir, filename), content);
 	} catch {
 		// Log writing is best-effort
 	}
+}
+
+interface RuntimePaths {
+	windowState: string;
+	rateLimits: string;
+	taskLogs: string;
+	docketReservations: string | null;
 }
 
 async function executeTask(
@@ -252,9 +292,13 @@ async function executeTask(
 		prompt: string;
 		project_dir: string;
 	},
+	runtimePaths: RuntimePaths,
 ): Promise<TaskOutcome> {
 	const startMs = Date.now();
-	const windowBefore = await captureWindowSnapshot();
+	const windowBefore = await captureWindowSnapshot(
+		runtimePaths.windowState,
+		runtimePaths.rateLimits,
+	);
 	await startTask(queuePath, task.id);
 
 	let calendarId: string | null = null;
@@ -284,11 +328,15 @@ async function executeTask(
 		);
 		const summary = stdout.slice(0, 500);
 		const durationMs = Date.now() - startMs;
-		const windowAfter = await captureWindowSnapshot();
+		const windowAfter = await captureWindowSnapshot(
+			runtimePaths.windowState,
+			runtimePaths.rateLimits,
+		);
 		await completeTask(queuePath, task.id, summary);
 
 		// Log full output with window consumption data
 		await writeTaskLog(
+			runtimePaths.taskLogs,
 			task.id,
 			task.name,
 			`TASK: ${task.name}\nSIZE: ${task.size}\nDIR: ${task.project_dir}\nDURATION: ${Math.round(durationMs / 1000)}s\nSTATUS: done\n\n---WINDOW---\n${formatWindowDelta(windowBefore, windowAfter)}\n\n---PROMPT---\n${task.prompt}\n\n---STDOUT---\n${stdout}\n\n---STDERR---\n${stderr}`,
@@ -318,7 +366,10 @@ async function executeTask(
 	} catch (err) {
 		const errMsg = (err as Error).message;
 		const durationMs = Date.now() - startMs;
-		const windowAfter = await captureWindowSnapshot();
+		const windowAfter = await captureWindowSnapshot(
+			runtimePaths.windowState,
+			runtimePaths.rateLimits,
+		);
 		const fastDeath = durationMs < 30_000;
 		const failReason = fastDeath
 			? `fast failure (${Math.round(durationMs / 1000)}s) — likely rate-limited: ${errMsg.slice(0, 80)}`
@@ -327,6 +378,7 @@ async function executeTask(
 
 		// Log full error with window state for debugging
 		await writeTaskLog(
+			runtimePaths.taskLogs,
 			task.id,
 			task.name,
 			`TASK: ${task.name}\nSIZE: ${task.size}\nDIR: ${task.project_dir}\nDURATION: ${Math.round(durationMs / 1000)}s\nSTATUS: failed${fastDeath ? " (FAST DEATH)" : ""}\n\n---WINDOW---\n${formatWindowDelta(windowBefore, windowAfter)}\n\n---PROMPT---\n${task.prompt}\n\n---ERROR---\n${errMsg}`,
@@ -357,13 +409,22 @@ async function executeTask(
 }
 
 export async function run(options: RunnerOptions): Promise<RunnerResult> {
-	const { queuePath, dryRun = false } = options;
+	const { queuePath, dryRun = false, config } = options;
+	const p = paths(config);
+	const docketPath = config.docket?.reservationsPath ?? null;
+
+	const runtimePaths: RuntimePaths = {
+		windowState: p.windowState,
+		rateLimits: p.rateLimits,
+		taskLogs: p.taskLogs,
+		docketReservations: docketPath,
+	};
 
 	const task = await nextTask(queuePath);
 	const [activeBlock, rateLimits, reservation] = await Promise.all([
 		getActiveBlock(),
-		readRateLimits(),
-		readActiveReservation(),
+		readRateLimits(p.windowState, p.rateLimits),
+		docketPath ? readActiveReservation(docketPath) : Promise.resolve(null),
 	]);
 
 	let busyNow = false;
@@ -420,19 +481,20 @@ export async function run(options: RunnerOptions): Promise<RunnerResult> {
 	}
 
 	// Drain loop: keep running tasks while window has capacity
-	return drainQueue(queuePath, task);
+	return drainQueue(queuePath, task, runtimePaths);
 }
 
 async function drainQueue(
 	queuePath: string,
 	firstTask: Parameters<typeof executeTask>[1],
+	runtimePaths: RuntimePaths,
 ): Promise<RunnerResult> {
 	const outcomes: TaskOutcome[] = [];
 	let currentTask: Parameters<typeof executeTask>[1] | null = firstTask;
 	let consecutiveFailures = 0;
 
 	while (currentTask) {
-		const outcome = await executeTask(queuePath, currentTask);
+		const outcome = await executeTask(queuePath, currentTask, runtimePaths);
 		outcomes.push(outcome);
 
 		if (outcome.success) {
@@ -456,8 +518,10 @@ async function drainQueue(
 		// respect calendar events and budget that may have changed.
 		const [, limits, resv] = await Promise.all([
 			getActiveBlock(),
-			readRateLimits(),
-			readActiveReservation(),
+			readRateLimits(runtimePaths.windowState, runtimePaths.rateLimits),
+			runtimePaths.docketReservations
+				? readActiveReservation(runtimePaths.docketReservations)
+				: Promise.resolve(null),
 		]);
 		let busy = false;
 		try {

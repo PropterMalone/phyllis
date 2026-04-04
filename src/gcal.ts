@@ -2,8 +2,11 @@
 // Google Calendar integration via gws CLI
 
 import { execFile } from "node:child_process";
-import { readFile, writeFile } from "node:fs/promises";
-import { resolve } from "node:path";
+import {
+	type CalendarConfig,
+	loadConfig as loadMainConfig,
+	saveConfig as saveMainConfig,
+} from "./config.ts";
 import type { PhyllisEvent } from "./types.ts";
 
 export interface BusySlot {
@@ -36,15 +39,6 @@ interface EventListResponse {
 	items?: EventResponse[];
 }
 
-interface CalendarConfig {
-	calendarId: string;
-	created: string;
-	calendarIds: string[]; // all calendar IDs for freebusy queries
-	calendarIdsUpdated: string;
-}
-
-const CONFIG_PATH = resolve(process.cwd(), "phyllis-calendar.json");
-
 // Skip holiday/import calendars — they don't represent real busy time
 const SKIP_PATTERNS = [
 	"#holiday@group.v.calendar.google.com",
@@ -74,19 +68,17 @@ function defaultExec(args: string[]): Promise<string> {
 	});
 }
 
-// --- Config persistence ---
+// --- Config persistence (delegates to main config) ---
 
 export async function loadConfig(): Promise<CalendarConfig | null> {
-	try {
-		const content = await readFile(CONFIG_PATH, "utf-8");
-		return JSON.parse(content) as CalendarConfig;
-	} catch {
-		return null;
-	}
+	const config = await loadMainConfig();
+	return config.calendar;
 }
 
-export async function saveConfig(config: CalendarConfig): Promise<void> {
-	await writeFile(CONFIG_PATH, `${JSON.stringify(config, null, "\t")}\n`);
+export async function saveConfig(calendar: CalendarConfig): Promise<void> {
+	const config = await loadMainConfig();
+	config.calendar = calendar;
+	await saveMainConfig(config);
 }
 
 // --- Calendar list ---
@@ -261,7 +253,9 @@ export async function getCalendarIds(
 	const config = await loadConfig();
 	if (config?.calendarIds?.length) {
 		// Refresh if stale (older than 24h)
-		const age = Date.now() - new Date(config.calendarIdsUpdated).getTime();
+		const age = config.calendarIdsUpdated
+			? Date.now() - new Date(config.calendarIdsUpdated).getTime()
+			: Number.POSITIVE_INFINITY;
 		if (age < 24 * 60 * 60 * 1000) return config.calendarIds;
 	}
 	const ids = await fetchCalendarIds(exec);
