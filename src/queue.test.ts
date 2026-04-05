@@ -9,6 +9,7 @@ import {
 	findTasksByPattern,
 	listTasks,
 	nextTask,
+	requeueTask,
 	startTask,
 } from "./queue.ts";
 
@@ -139,6 +140,29 @@ describe("task lifecycle", () => {
 			expect(done.status).toBe("done");
 			expect(done.completed_at).toBeTruthy();
 			expect(done.result_summary).toBe("Ran 9 personas, all passed");
+		});
+	});
+
+	it("transitions running → queued via requeue", async () => {
+		await withTmpQueue(async (queuePath) => {
+			const t = await addTask(queuePath, baseTask);
+			await startTask(queuePath, t.id);
+
+			const requeued = await requeueTask(
+				queuePath,
+				t.id,
+				"rate-limited — requeued for next window",
+			);
+			expect(requeued.status).toBe("queued");
+			expect(requeued.started_at).toBeUndefined();
+			expect(requeued.completed_at).toBeUndefined();
+			expect(requeued.result_summary).toBe(
+				"requeued: rate-limited — requeued for next window",
+			);
+
+			// Should be picked up by nextTask again
+			const next = await nextTask(queuePath);
+			expect(next?.id).toBe(t.id);
 		});
 	});
 

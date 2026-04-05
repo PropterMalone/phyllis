@@ -13,7 +13,13 @@ import {
 	getOrCreatePhyllisCalendar,
 	updateEvent,
 } from "./gcal.ts";
-import { completeTask, failTask, nextTask, startTask } from "./queue.ts";
+import {
+	completeTask,
+	failTask,
+	nextTask,
+	requeueTask,
+	startTask,
+} from "./queue.ts";
 import {
 	type DocketReservation,
 	estimateBlockMinutes,
@@ -167,6 +173,21 @@ export function isHookOnlyFailure(stderr: string): boolean {
 		.filter((l) => l.trim().length > 0);
 	if (lines.length === 0) return false;
 	return lines.every((line) => /hook\s+\[.*\]\s+failed:/i.test(line));
+}
+
+// Detect rate-limit / out-of-usage messages in claude -p output.
+// These can appear in stdout (exit 0) or stderr (exit non-zero).
+// When detected, the task should be requeued, not completed or failed.
+const RATE_LIMIT_PATTERNS = [
+	/out of (?:extra )?usage/i,
+	/rate.?limit/i,
+	/usage.?limit/i,
+	/too many requests/i,
+	/over(?:loaded|capacity)/i,
+];
+
+export function isRateLimitOutput(text: string): boolean {
+	return RATE_LIMIT_PATTERNS.some((p) => p.test(text));
 }
 
 function runClaude(
@@ -376,6 +397,29 @@ async function executeTask(
 			runtimePaths.windowState,
 			runtimePaths.rateLimits,
 		);
+
+		// Rate-limit messages can arrive as "successful" output (exit 0).
+		// Requeue the task instead of marking it done.
+		if (isRateLimitOutput(stdout) || isRateLimitOutput(stderr)) {
+			const rateLimitReason = "rate-limited — requeued for next window";
+			await requeueTask(queuePath, task.id, rateLimitReason);
+			await writeTaskLog(
+				runtimePaths.taskLogs,
+				task.id,
+				task.name,
+				`TASK: ${task.name}\nSIZE: ${task.size}\nDIR: ${task.project_dir}\nDURATION: ${Math.round(durationMs / 1000)}s\nSTATUS: requeued (rate-limited)\n\n---STDOUT---\n${stdout}\n\n---STDERR---\n${stderr}`,
+			);
+			return {
+				taskId: task.id,
+				taskName: task.name,
+				success: false,
+				durationMs,
+				reason: "rate_limited",
+				windowBefore,
+				windowAfter,
+			};
+		}
+
 		await completeTask(queuePath, task.id, summary);
 
 		// Log full output with window consumption data
@@ -415,10 +459,26 @@ async function executeTask(
 			runtimePaths.rateLimits,
 		);
 		const fastDeath = durationMs < 30_000;
-		const failReason = fastDeath
-			? `fast failure (${Math.round(durationMs / 1000)}s) — likely rate-limited: ${errMsg.slice(0, 80)}`
-			: `failed: ${errMsg.slice(0, 100)}`;
-		await failTask(queuePath, task.id, errMsg.slice(0, 500));
+		const rateLimited = isRateLimitOutput(errMsg);
+
+		// Rate-limited tasks get requeued, not failed — they'll run in the next window.
+		// Only requeue on explicit rate-limit text, not all fast deaths (which could be
+		// config errors that would loop forever if blindly requeued).
+		if (rateLimited) {
+			await requeueTask(
+				queuePath,
+				task.id,
+				"rate-limited — requeued for next window",
+			);
+		} else {
+			await failTask(queuePath, task.id, errMsg.slice(0, 500));
+		}
+
+		const failReason = rateLimited
+			? "rate_limited"
+			: fastDeath
+				? `fast failure (${Math.round(durationMs / 1000)}s) — likely rate-limited: ${errMsg.slice(0, 80)}`
+				: `failed: ${errMsg.slice(0, 100)}`;
 
 		// Log full error with window state for debugging
 		await writeTaskLog(
@@ -541,6 +601,12 @@ async function drainQueue(
 		const outcome = await executeTask(queuePath, currentTask, runtimePaths);
 		outcomes.push(outcome);
 
+		if (outcome.reason === "rate_limited") {
+			// Rate-limited: stop immediately — task is already requeued,
+			// next cron invocation will check window state before retrying
+			break;
+		}
+
 		if (outcome.success) {
 			consecutiveFailures = 0;
 		} else {
@@ -548,8 +614,8 @@ async function drainQueue(
 			if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
 				break;
 			}
-			// Back off before retrying — instant retries after rate-limit failures
-			// just burn through the failure budget without giving the limit time to clear
+			// Back off before retrying — instant retries after failures
+			// just burn through the failure budget without giving time to clear
 			await new Promise((r) => setTimeout(r, FAILURE_BACKOFF_MS));
 		}
 

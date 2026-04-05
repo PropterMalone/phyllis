@@ -118,6 +118,22 @@ export async function completeTask(
 	return task;
 }
 
+export async function requeueTask(
+	queuePath: string,
+	id: string,
+	reason: string,
+): Promise<QueuedTask> {
+	const tasks = await readQueue(queuePath);
+	const task = updateTask(tasks, id, {
+		status: "queued",
+		started_at: undefined,
+		completed_at: undefined,
+		result_summary: `requeued: ${reason}`,
+	});
+	await writeQueue(queuePath, tasks);
+	return task;
+}
+
 export async function failTask(
 	queuePath: string,
 	id: string,

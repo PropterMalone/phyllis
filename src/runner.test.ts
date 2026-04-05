@@ -29,8 +29,14 @@ import {
 	getOrCreatePhyllisCalendar,
 	updateEvent,
 } from "./gcal.ts";
-import { completeTask, failTask, nextTask, startTask } from "./queue.ts";
-import { isHookOnlyFailure, run } from "./runner.ts";
+import {
+	completeTask,
+	failTask,
+	nextTask,
+	requeueTask,
+	startTask,
+} from "./queue.ts";
+import { isHookOnlyFailure, isRateLimitOutput, run } from "./runner.ts";
 import { shouldSchedule } from "./scheduler.ts";
 
 const makeTask = (overrides: Partial<QueuedTask> = {}): QueuedTask => ({
@@ -125,6 +131,40 @@ describe("isHookOnlyFailure", () => {
 	});
 });
 
+describe("isRateLimitOutput", () => {
+	it("detects 'out of extra usage' message", () => {
+		expect(
+			isRateLimitOutput("You're out of extra usage · resets 11pm (UTC)\n"),
+		).toBe(true);
+	});
+
+	it("detects 'out of usage' without 'extra'", () => {
+		expect(isRateLimitOutput("You're out of usage · resets in 3h")).toBe(true);
+	});
+
+	it("detects rate limit in error messages", () => {
+		expect(isRateLimitOutput("Error: rate limit exceeded")).toBe(true);
+		expect(isRateLimitOutput("Rate-limit hit, try again later")).toBe(true);
+	});
+
+	it("detects too many requests", () => {
+		expect(isRateLimitOutput("429 Too Many Requests")).toBe(true);
+	});
+
+	it("detects overloaded/overcapacity", () => {
+		expect(isRateLimitOutput("Server is overloaded")).toBe(true);
+		expect(isRateLimitOutput("overcapacity, please try again")).toBe(true);
+	});
+
+	it("returns false for normal output", () => {
+		expect(isRateLimitOutput("Report written to /tmp/angel-covet.md")).toBe(
+			false,
+		);
+		expect(isRateLimitOutput("task output")).toBe(false);
+		expect(isRateLimitOutput("")).toBe(false);
+	});
+});
+
 describe("runner", () => {
 	beforeEach(() => {
 		vi.useFakeTimers();
@@ -143,6 +183,7 @@ describe("runner", () => {
 		vi.mocked(startTask).mockResolvedValue(undefined as never);
 		vi.mocked(completeTask).mockResolvedValue(undefined as never);
 		vi.mocked(failTask).mockResolvedValue(undefined as never);
+		vi.mocked(requeueTask).mockResolvedValue(undefined as never);
 		vi.mocked(shouldSchedule).mockReturnValue({
 			decision: "schedule",
 			reason: "test",
@@ -408,7 +449,7 @@ describe("runner", () => {
 			process.nextTick(() => {
 				child.stdout.write("partial output");
 				child.stdout.end();
-				child.stderr.write("Error: rate limit exceeded\n");
+				child.stderr.write("Error: permission denied\n");
 				child.stderr.end();
 				child.emit("close", 1);
 			});
@@ -503,5 +544,137 @@ describe("runner", () => {
 		expect(result.tasks[0].success).toBe(true);
 		expect(spawn).toHaveBeenCalled();
 		expect(startTask).toHaveBeenCalled();
+	});
+
+	it("requeues task when stdout contains rate-limit message", async () => {
+		vi.mocked(nextTask)
+			.mockResolvedValueOnce(makeTask())
+			.mockResolvedValue(null);
+
+		const EventEmitter = require("node:events");
+		const { PassThrough } = require("node:stream");
+		vi.mocked(spawn).mockImplementation(() => {
+			const child = new EventEmitter();
+			child.stdout = new PassThrough();
+			child.stderr = new PassThrough();
+			child.kill = vi.fn();
+			process.nextTick(() => {
+				child.stdout.write("You're out of extra usage · resets 11pm (UTC)\n");
+				child.stdout.end();
+				child.stderr.end();
+				child.emit("close", 0);
+			});
+			return child as unknown as ReturnType<typeof spawn>;
+		});
+
+		const result = await run(defaultOpts);
+
+		expect(result.tasks).toHaveLength(1);
+		expect(result.tasks[0].success).toBe(false);
+		expect(result.tasks[0].reason).toBe("rate_limited");
+		expect(requeueTask).toHaveBeenCalledWith(
+			defaultOpts.queuePath,
+			"task-1",
+			"rate-limited — requeued for next window",
+		);
+		expect(completeTask).not.toHaveBeenCalled();
+		expect(failTask).not.toHaveBeenCalled();
+	});
+
+	it("fails (not requeues) fast-death without rate-limit text", async () => {
+		vi.mocked(nextTask)
+			.mockResolvedValueOnce(makeTask())
+			.mockResolvedValue(null);
+
+		const EventEmitter = require("node:events");
+		const { PassThrough } = require("node:stream");
+		vi.mocked(spawn).mockImplementation(() => {
+			const child = new EventEmitter();
+			child.stdout = new PassThrough();
+			child.stderr = new PassThrough();
+			child.kill = vi.fn();
+			process.nextTick(() => {
+				child.stderr.write("connection refused");
+				child.stderr.end();
+				child.stdout.end();
+				child.emit("close", 1);
+			});
+			return child as unknown as ReturnType<typeof spawn>;
+		});
+
+		const resultP = run(defaultOpts);
+		await vi.advanceTimersByTimeAsync(120_000);
+		const result = await resultP;
+
+		expect(result.tasks).toHaveLength(1);
+		expect(result.tasks[0].success).toBe(false);
+		expect(result.tasks[0].reason).toContain("fast failure");
+		expect(failTask).toHaveBeenCalled();
+		expect(requeueTask).not.toHaveBeenCalled();
+	});
+
+	it("stops drain loop immediately on rate-limit", async () => {
+		const task1 = makeTask({ id: "t1", name: "rate-limited task" });
+		const task2 = makeTask({ id: "t2", name: "should not run" });
+
+		vi.mocked(nextTask)
+			.mockResolvedValueOnce(task1)
+			.mockResolvedValueOnce(task2)
+			.mockResolvedValue(null);
+
+		const EventEmitter = require("node:events");
+		const { PassThrough } = require("node:stream");
+		vi.mocked(spawn).mockImplementation(() => {
+			const child = new EventEmitter();
+			child.stdout = new PassThrough();
+			child.stderr = new PassThrough();
+			child.kill = vi.fn();
+			process.nextTick(() => {
+				child.stdout.write("You're out of extra usage · resets 11pm (UTC)\n");
+				child.stdout.end();
+				child.stderr.end();
+				child.emit("close", 0);
+			});
+			return child as unknown as ReturnType<typeof spawn>;
+		});
+
+		const result = await run(defaultOpts);
+
+		// Should only have 1 task — drain loop stops immediately on rate-limit
+		expect(result.tasks).toHaveLength(1);
+		expect(result.tasks[0].reason).toBe("rate_limited");
+		expect(startTask).toHaveBeenCalledTimes(1);
+	});
+
+	it("requeues on error-path rate-limit message", async () => {
+		vi.mocked(nextTask)
+			.mockResolvedValueOnce(makeTask())
+			.mockResolvedValue(null);
+
+		const EventEmitter = require("node:events");
+		const { PassThrough } = require("node:stream");
+		vi.mocked(spawn).mockImplementation(() => {
+			const child = new EventEmitter();
+			child.stdout = new PassThrough();
+			child.stderr = new PassThrough();
+			child.kill = vi.fn();
+			// Simulate a slow failure with rate-limit in error message
+			setTimeout(() => {
+				child.stderr.write("Error: rate limit exceeded\n");
+				child.stderr.end();
+				child.stdout.end();
+				child.emit("close", 1);
+			}, 60_000); // > 30s so it's not fast-death
+			return child as unknown as ReturnType<typeof spawn>;
+		});
+
+		const resultP = run(defaultOpts);
+		await vi.advanceTimersByTimeAsync(120_000);
+		const result = await resultP;
+
+		expect(result.tasks).toHaveLength(1);
+		expect(result.tasks[0].reason).toBe("rate_limited");
+		expect(requeueTask).toHaveBeenCalled();
+		expect(failTask).not.toHaveBeenCalled();
 	});
 });
