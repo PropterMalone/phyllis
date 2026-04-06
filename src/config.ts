@@ -11,6 +11,13 @@ export interface CalendarConfig {
 	calendarIdsUpdated?: string;
 }
 
+export interface NotifyConfig {
+	/** signal-cli account phone number (e.g. "+13109803137") */
+	signalAccount: string;
+	/** Recipient phone number to notify */
+	signalRecipient: string;
+}
+
 export interface PhyllisConfig {
 	home: string;
 	userId: string;
@@ -23,6 +30,7 @@ export interface PhyllisConfig {
 	docket: {
 		reservationsPath: string;
 	} | null;
+	notify: NotifyConfig | null;
 }
 
 /** Resolve the Phyllis home directory: PHYLLIS_HOME env → ~/.phyllis */
@@ -47,6 +55,7 @@ export function defaultConfig(home?: string): PhyllisConfig {
 		docket: userHome
 			? { reservationsPath: join(userHome, ".docket", "reservations.json") }
 			: null,
+		notify: null,
 	};
 }
 
@@ -95,6 +104,7 @@ export function mergeConfig(
 		calendar:
 			stored.calendar !== undefined ? stored.calendar : defaults.calendar,
 		docket: stored.docket !== undefined ? stored.docket : defaults.docket,
+		notify: stored.notify !== undefined ? stored.notify : defaults.notify,
 	};
 }
 

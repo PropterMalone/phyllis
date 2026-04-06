@@ -5,7 +5,7 @@ import { type ChildProcess, execSync, spawn } from "node:child_process";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fetchBlocks } from "./ccusage.ts";
-import type { PhyllisConfig } from "./config.ts";
+import type { NotifyConfig, PhyllisConfig } from "./config.ts";
 import { paths } from "./config.ts";
 import {
 	checkBusy,
@@ -13,6 +13,7 @@ import {
 	getOrCreatePhyllisCalendar,
 	updateEvent,
 } from "./gcal.ts";
+import { formatTaskNotification, sendNotification } from "./notify.ts";
 import {
 	completeTask,
 	failTask,
@@ -300,6 +301,7 @@ interface RuntimePaths {
 	rateLimits: string;
 	taskLogs: string;
 	docketReservations: string | null;
+	notify: NotifyConfig | null;
 }
 
 function runPreflight(command: string, projectDir: string): "skip" | "proceed" {
@@ -442,6 +444,13 @@ async function executeTask(
 			}
 		}
 
+		if (runtimePaths.notify) {
+			sendNotification(
+				runtimePaths.notify,
+				formatTaskNotification(task.name, true, durationMs, "completed"),
+			);
+		}
+
 		return {
 			taskId: task.id,
 			taskName: task.name,
@@ -500,6 +509,13 @@ async function executeTask(
 			}
 		}
 
+		if (runtimePaths.notify && !rateLimited) {
+			sendNotification(
+				runtimePaths.notify,
+				formatTaskNotification(task.name, false, durationMs, failReason),
+			);
+		}
+
 		return {
 			taskId: task.id,
 			taskName: task.name,
@@ -522,6 +538,7 @@ export async function run(options: RunnerOptions): Promise<RunnerResult> {
 		rateLimits: p.rateLimits,
 		taskLogs: p.taskLogs,
 		docketReservations: docketPath,
+		notify: config.notify ?? null,
 	};
 
 	const task = await nextTask(queuePath);
