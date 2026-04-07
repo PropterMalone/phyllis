@@ -17,6 +17,7 @@ import {
 	type PhyllisConfig,
 	paths,
 } from "./config.ts";
+import { digest } from "./digest.ts";
 import {
 	getOrCreatePhyllisCalendar,
 	listUpcoming,
@@ -31,6 +32,7 @@ import {
 	listTasks,
 } from "./queue.ts";
 import { run } from "./runner.ts";
+import { setup } from "./setup.ts";
 import type { CalibrationEntry, TaskSize } from "./types.ts";
 import { buildWeeklySummary, renderWeeklySummary } from "./weekly.ts";
 
@@ -39,6 +41,7 @@ function usage(): never {
 
 Usage:
   phyllis init
+  phyllis setup [--force]
   phyllis harvest [--user <id>] [--log <path>] [--dry-run]
   phyllis snapshot [--user <id>] [--log <path>] [--dry-run]
   phyllis analyze [--log <path>] [--metric <tokens|cost>]
@@ -48,18 +51,21 @@ Usage:
   phyllis queue done <name-or-id>
   phyllis queue angel --dir <d> [--priority <n>] [--queue <path>]
   phyllis run [--queue <path>] [--dry-run]
+  phyllis digest [--hours <n>] [--dry-run]
   phyllis proxy [--port 7735] [--log <path>]
   phyllis calendar setup
   phyllis calendar list [--hours <n>]
 
 Commands:
   init      Create ~/.phyllis config and directory structure
+  setup     Install hooks + statusline into Claude Code
   harvest   Process completed blocks into calibration entries
   snapshot  Capture the active block with projection data
   analyze   Show usage heatmap and project breakdown
   weekly    Show weekly summary with burn rate trends
   queue     Manage deferrable task queue
   run       Check window state and execute next queued task
+  digest    Send overnight task summary email (default: last 18h)
   proxy     Start rate-limit header capture proxy
   calendar  Manage Phyllis Google Calendar integration
 
@@ -73,12 +79,14 @@ Options:
 
 type Command =
 	| "init"
+	| "setup"
 	| "harvest"
 	| "snapshot"
 	| "analyze"
 	| "weekly"
 	| "queue"
 	| "run"
+	| "digest"
 	| "proxy"
 	| "calendar";
 
@@ -88,6 +96,7 @@ interface ParsedArgs {
 	logPath?: string;
 	queuePath?: string;
 	dryRun: boolean;
+	force: boolean;
 	metric: "tokens" | "cost";
 	// queue add fields
 	taskName?: string;
@@ -104,12 +113,14 @@ interface ParsedArgs {
 
 const VALID_COMMANDS = new Set([
 	"init",
+	"setup",
 	"harvest",
 	"snapshot",
 	"analyze",
 	"weekly",
 	"queue",
 	"run",
+	"digest",
 	"proxy",
 	"calendar",
 ]);
@@ -125,6 +136,7 @@ function parseArgs(argv: string[]): ParsedArgs {
 	let logPath: string | undefined;
 	let queuePath: string | undefined;
 	let dryRun = false;
+	let force = false;
 	let metric: "tokens" | "cost" = "cost";
 	let subcommand: string | undefined;
 	let taskName: string | undefined;
@@ -172,6 +184,9 @@ function parseArgs(argv: string[]): ParsedArgs {
 			case "--dry-run":
 				dryRun = true;
 				break;
+			case "--force":
+				force = true;
+				break;
 			case "--metric": {
 				const m = args[++i];
 				if (m !== "tokens" && m !== "cost") usage();
@@ -214,6 +229,7 @@ function parseArgs(argv: string[]): ParsedArgs {
 		logPath,
 		queuePath,
 		dryRun,
+		force,
 		metric,
 		subcommand,
 		taskName,
@@ -470,6 +486,22 @@ async function runCalendar(parsed: ResolvedArgs): Promise<void> {
 	process.exit(1);
 }
 
+async function runDigest(parsed: ResolvedArgs): Promise<void> {
+	const p = paths(parsed.config);
+	const result = await digest({
+		queuePath: parsed.resolvedQueuePath,
+		taskLogsDir: p.taskLogs,
+		dryRun: parsed.dryRun,
+		cutoffHours: parsed.hours ?? 18,
+	});
+
+	if (parsed.dryRun) {
+		console.log(result);
+	} else {
+		console.log(`sent: ${result}`);
+	}
+}
+
 async function runScheduler(parsed: ResolvedArgs): Promise<void> {
 	const result = await run({
 		queuePath: parsed.resolvedQueuePath,
@@ -529,6 +561,36 @@ async function main(): Promise<void> {
 		return;
 	}
 
+	// setup doesn't need config loading either
+	if (parsed.command === "setup") {
+		const home = process.env.HOME ?? "";
+		const phyllisHome = process.env.PHYLLIS_HOME ?? `${home}/.phyllis`;
+		const claudeHome = `${home}/.claude`;
+		// Find hooks source directory relative to this script
+		const hooksSrcDir = new URL("../hooks", import.meta.url).pathname;
+		const plan = await setup({
+			phyllisHome,
+			claudeHome,
+			hooksSrcDir,
+			force: parsed.force,
+		});
+		for (const w of plan.warnings) {
+			console.log(`  warning: ${w}`);
+		}
+		console.log(`hooks installed to ${plan.hooksDir}`);
+		for (const f of plan.hooksToCopy) {
+			console.log(`  ${f}`);
+		}
+		console.log(`settings updated: ${plan.settingsPath}`);
+		if (plan.statusLine) {
+			console.log("  statusline: configured");
+		}
+		for (const h of plan.hooksToAdd) {
+			console.log(`  ${h.event}: configured`);
+		}
+		return;
+	}
+
 	const resolved = await resolveArgs(parsed);
 
 	switch (resolved.command) {
@@ -546,6 +608,9 @@ async function main(): Promise<void> {
 			break;
 		case "run":
 			await runScheduler(resolved);
+			break;
+		case "digest":
+			await runDigest(resolved);
 			break;
 		case "proxy": {
 			const port = resolved.proxyPort ?? resolved.config.proxy.port;

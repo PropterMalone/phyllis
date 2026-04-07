@@ -10,19 +10,36 @@
 		"harvest": "node --import tsx src/cli.ts harvest",
 		"snapshot": "node --import tsx src/cli.ts snapshot",
 		"analyze": "node --import tsx src/cli.ts analyze",
-		"build": "tsc",
+		"build": "node build.js",
 		"format": "biome format --write .",
 		"lint": "biome check --write .",
 		"typecheck": "tsc --noEmit",
 		"test": "vitest run",
-		"validate": "biome check . && tsc --noEmit && vitest run"
+		"validate": "biome check . && tsc --noEmit && vitest run",
+		"prepublishOnly": "npm run validate && npm run build"
 	},
-	"keywords": [],
-	"author": "",
+	"files": [
+		"dist/",
+		"hooks/",
+		"README.md"
+	],
+	"keywords": [
+		"claude-code",
+		"anthropic",
+		"rate-limiting",
+		"scheduler",
+		"usage-optimizer"
+	],
+	"author": "PropterMalone",
 	"license": "ISC",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/PropterMalone/phyllis.git"
+	},
 	"devDependencies": {
 		"@biomejs/biome": "^2.4.10",
 		"@types/node": "^25.5.0",
+		"esbuild": "0.28.0",
 		"tsx": "^4.21.0",
 		"typescript": "^6.0.2",
 		"vitest": "^4.1.2"

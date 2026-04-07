@@ -4,17 +4,20 @@
 import { execFileSync } from "node:child_process";
 import type { NotifyConfig } from "./config.ts";
 
-export function sendNotification(
-	config: NotifyConfig,
-	message: string,
-): void {
+export function sendNotification(config: NotifyConfig, message: string): void {
 	try {
-		execFileSync("signal-cli", [
-			"-a", config.signalAccount,
-			"send",
-			"-m", message,
-			config.signalRecipient,
-		], { timeout: 30_000, stdio: "ignore" });
+		execFileSync(
+			"signal-cli",
+			[
+				"-a",
+				config.signalAccount,
+				"send",
+				"-m",
+				message,
+				config.signalRecipient,
+			],
+			{ timeout: 30_000, stdio: "ignore" },
+		);
 	} catch (err) {
 		// Notification failures are never fatal
 		console.error(
