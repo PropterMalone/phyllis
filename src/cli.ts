@@ -33,6 +33,7 @@ import {
 } from "./queue.ts";
 import { run } from "./runner.ts";
 import { setup } from "./setup.ts";
+import { buildThrottleEntry } from "./throttle.ts";
 import type { CalibrationEntry, TaskSize } from "./types.ts";
 import { buildWeeklySummary, renderWeeklySummary } from "./weekly.ts";
 
@@ -52,6 +53,7 @@ Usage:
   phyllis queue angel --dir <d> [--priority <n>] [--queue <path>]
   phyllis run [--queue <path>] [--dry-run]
   phyllis digest [--hours <n>] [--dry-run]
+  phyllis throttle [--notes "..."] [--dry-run]
   phyllis proxy [--port 7735] [--log <path>]
   phyllis calendar setup
   phyllis calendar list [--hours <n>]
@@ -66,6 +68,7 @@ Commands:
   queue     Manage deferrable task queue
   run       Check window state and execute next queued task
   digest    Send overnight task summary email (default: last 18h)
+  throttle  Record that the current window hit a rate limit
   proxy     Start rate-limit header capture proxy
   calendar  Manage Phyllis Google Calendar integration
 
@@ -87,6 +90,7 @@ type Command =
 	| "queue"
 	| "run"
 	| "digest"
+	| "throttle"
 	| "proxy"
 	| "calendar";
 
@@ -109,6 +113,7 @@ interface ParsedArgs {
 	taskPattern?: string;
 	hours?: number;
 	proxyPort?: number;
+	throttleNotes?: string;
 }
 
 const VALID_COMMANDS = new Set([
@@ -121,6 +126,7 @@ const VALID_COMMANDS = new Set([
 	"queue",
 	"run",
 	"digest",
+	"throttle",
 	"proxy",
 	"calendar",
 ]);
@@ -148,6 +154,7 @@ function parseArgs(argv: string[]): ParsedArgs {
 	let taskPattern: string | undefined;
 	let hours: number | undefined;
 	let proxyPort: number | undefined;
+	let throttleNotes: string | undefined;
 
 	// For "queue" and "calendar", first positional after command is the subcommand
 	let startIdx = 1;
@@ -217,6 +224,9 @@ function parseArgs(argv: string[]): ParsedArgs {
 			case "--port":
 				proxyPort = Number(args[++i]);
 				break;
+			case "--notes":
+				throttleNotes = args[++i];
+				break;
 			default:
 				console.error(`unknown option: ${args[i]}`);
 				usage();
@@ -241,6 +251,7 @@ function parseArgs(argv: string[]): ParsedArgs {
 		taskPattern,
 		hours,
 		proxyPort,
+		throttleNotes,
 	};
 }
 
@@ -502,6 +513,76 @@ async function runDigest(parsed: ResolvedArgs): Promise<void> {
 	}
 }
 
+async function runThrottle(parsed: ResolvedArgs): Promise<void> {
+	const { fetchBlocks } = await import("./ccusage.ts");
+	const { appendFile } = await import("node:fs/promises");
+
+	const blocks = await fetchBlocks();
+
+	// Read rate limits if available
+	const p = paths(parsed.config);
+	let rateLimits: { fiveHourPct: number; sevenDayPct: number } | null = null;
+	try {
+		const { readFile } = await import("node:fs/promises");
+		const content = await readFile(p.rateLimits, "utf-8");
+		const data = JSON.parse(content) as {
+			five_hour?: { used_percentage?: number };
+			seven_day?: { used_percentage?: number };
+		};
+		if (data.five_hour?.used_percentage != null) {
+			rateLimits = {
+				fiveHourPct: data.five_hour.used_percentage,
+				sevenDayPct: data.seven_day?.used_percentage ?? 0,
+			};
+		}
+	} catch {
+		// no rate limit data available
+	}
+
+	const result = buildThrottleEntry(
+		blocks,
+		parsed.resolvedUserId,
+		rateLimits,
+		parsed.throttleNotes,
+	);
+
+	if (!result) {
+		console.error("no active or recent block found — nothing to annotate");
+		process.exit(1);
+	}
+
+	const line = JSON.stringify(result.entry);
+
+	if (parsed.dryRun) {
+		console.log(`[dry-run] would append to ${parsed.resolvedLogPath}:`);
+		console.log(`  ${result.matched} block: ${result.entry.window_start}`);
+		console.log(
+			`  ${result.entry.tokens_consumed.toLocaleString()} tokens, $${result.entry.cost_equiv.toFixed(2)}`,
+		);
+		if (rateLimits) {
+			console.log(
+				`  rate limits: 5h=${rateLimits.fiveHourPct}%, 7d=${rateLimits.sevenDayPct}%`,
+			);
+		}
+		console.log(`  notes: ${result.entry.notes}`);
+		return;
+	}
+
+	await appendFile(parsed.resolvedLogPath, `${line}\n`);
+	console.log(`throttle recorded for ${result.matched} block`);
+	console.log(
+		`  ${result.entry.window_start} — ${result.entry.tokens_consumed.toLocaleString()} tokens, $${result.entry.cost_equiv.toFixed(2)}`,
+	);
+	if (rateLimits) {
+		console.log(
+			`  rate limits: 5h=${rateLimits.fiveHourPct}%, 7d=${rateLimits.sevenDayPct}%`,
+		);
+	}
+	if (result.entry.notes !== "Throttle annotated via CLI") {
+		console.log(`  notes: ${result.entry.notes}`);
+	}
+}
+
 async function runScheduler(parsed: ResolvedArgs): Promise<void> {
 	const result = await run({
 		queuePath: parsed.resolvedQueuePath,
@@ -608,6 +689,9 @@ async function main(): Promise<void> {
 			break;
 		case "run":
 			await runScheduler(resolved);
+			break;
+		case "throttle":
+			await runThrottle(resolved);
 			break;
 		case "digest":
 			await runDigest(resolved);

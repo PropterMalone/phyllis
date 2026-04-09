@@ -33,12 +33,30 @@ export interface SchedulerContext {
 	busyNow: boolean; // any calendar event in the next 30min
 	busyDuringWindow: boolean; // any calendar event in the next 5h
 	reservation: DocketReservation | null; // Docket says Karl expects to use Claude
+	hoursUntilWeeklyReset: number | null; // null = unknown
 }
 
 // Don't schedule if weekly budget is above this threshold
 const WEEKLY_BUDGET_THRESHOLD = 85;
 // Don't schedule if window is above this threshold
 const WINDOW_BUDGET_THRESHOLD = 80;
+// Estimated per-window capacity as % of weekly budget (empirical)
+const WINDOW_WEEKLY_PCT = 12;
+
+/**
+ * Are we past the burn point? Remaining weekly budget exceeds what can
+ * physically be consumed in the remaining windows before weekly reset.
+ * Once past burn point, all budget-based scheduling constraints drop.
+ */
+export function isPastBurnPoint(
+	weeklyPct: number,
+	hoursUntilReset: number,
+): boolean {
+	const remainingPct = 100 - weeklyPct;
+	const remainingWindows = Math.floor(hoursUntilReset / 5);
+	const maxBurnPct = remainingWindows * WINDOW_WEEKLY_PCT;
+	return remainingPct > maxBurnPct;
+}
 
 export type SchedulerDecision =
 	| { decision: "schedule"; reason: string }
@@ -77,18 +95,25 @@ export function shouldSchedule(ctx: SchedulerContext): SchedulerDecision {
 
 	// Check rate limit budgets before opening a new window
 	if (ctx.rateLimits) {
-		if (ctx.rateLimits.sevenDayPct >= WEEKLY_BUDGET_THRESHOLD) {
-			return {
-				decision: "weekly_budget_low",
-				reason: `weekly budget at ${ctx.rateLimits.sevenDayPct}% — preserving for interactive use`,
-			};
+		const burnPoint =
+			ctx.hoursUntilWeeklyReset != null &&
+			isPastBurnPoint(ctx.rateLimits.sevenDayPct, ctx.hoursUntilWeeklyReset);
+
+		if (!burnPoint) {
+			if (ctx.rateLimits.sevenDayPct >= WEEKLY_BUDGET_THRESHOLD) {
+				return {
+					decision: "weekly_budget_low",
+					reason: `weekly budget at ${ctx.rateLimits.sevenDayPct}% — preserving for interactive use`,
+				};
+			}
+			if (ctx.rateLimits.fiveHourPct >= WINDOW_BUDGET_THRESHOLD) {
+				return {
+					decision: "window_budget_low",
+					reason: `window at ${ctx.rateLimits.fiveHourPct}% — too little headroom for deferrable work`,
+				};
+			}
 		}
-		if (ctx.rateLimits.fiveHourPct >= WINDOW_BUDGET_THRESHOLD) {
-			return {
-				decision: "window_budget_low",
-				reason: `window at ${ctx.rateLimits.fiveHourPct}% — too little headroom for deferrable work`,
-			};
-		}
+		// Past burn point: skip all budget checks, fire freely
 	}
 
 	// Docket reservations — Karl plans to use Claude interactively

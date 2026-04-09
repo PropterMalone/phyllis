@@ -4,3 +4,5 @@ scheduler.log
 phyllis-calendar.json
 calibration-log.jsonl
 queue.json
+entities.json
+mempalace.yaml

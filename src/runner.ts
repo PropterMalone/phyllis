@@ -2,7 +2,7 @@
 // Cron entry point: check window state, drain queue within the current window
 
 import { type ChildProcess, execSync, spawn } from "node:child_process";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fetchBlocks } from "./ccusage.ts";
 import type { NotifyConfig, PhyllisConfig } from "./config.ts";
@@ -105,6 +105,9 @@ async function readRateLimits(
 
 	// Fallback: statusline script's rate-limit file
 	try {
+		const { mtimeMs } = await stat(rateLimitsPath);
+		const ageMs = Date.now() - mtimeMs;
+		if (ageMs > PROXY_STALENESS_MS) return null; // stale data — ignore
 		const content = await readFile(rateLimitsPath, "utf-8");
 		const data = JSON.parse(content) as {
 			five_hour?: { used_percentage?: number };
@@ -118,6 +121,39 @@ async function readRateLimits(
 	} catch {
 		return null;
 	}
+}
+
+async function getHoursUntilWeeklyReset(
+	windowStatePath: string,
+	rateLimitsPath: string,
+): Promise<number | null> {
+	// Try proxy state first
+	try {
+		const content = await readFile(windowStatePath, "utf-8");
+		const state = JSON.parse(content) as {
+			sevenDayResetAt?: string | null;
+		};
+		if (state.sevenDayResetAt) {
+			const ms = new Date(state.sevenDayResetAt).getTime() - Date.now();
+			if (ms > 0) return ms / (1000 * 60 * 60);
+		}
+	} catch {
+		// fall through
+	}
+	// Fallback: rate-limits.json resets_at (epoch seconds)
+	try {
+		const content = await readFile(rateLimitsPath, "utf-8");
+		const data = JSON.parse(content) as {
+			seven_day?: { resets_at?: number };
+		};
+		if (data.seven_day?.resets_at) {
+			const ms = data.seven_day.resets_at * 1000 - Date.now();
+			if (ms > 0) return ms / (1000 * 60 * 60);
+		}
+	} catch {
+		// fall through
+	}
+	return null;
 }
 
 async function readActiveReservation(
@@ -558,6 +594,11 @@ export async function run(options: RunnerOptions): Promise<RunnerResult> {
 		// If calendar is unavailable, don't block scheduling
 	}
 
+	const hoursUntilWeeklyReset = await getHoursUntilWeeklyReset(
+		p.windowState,
+		p.rateLimits,
+	);
+
 	const ctx: SchedulerContext = {
 		activeBlock,
 		nextTaskSize: task?.size ?? null,
@@ -565,6 +606,7 @@ export async function run(options: RunnerOptions): Promise<RunnerResult> {
 		busyNow,
 		busyDuringWindow,
 		reservation,
+		hoursUntilWeeklyReset,
 	};
 
 	const { decision, reason } = shouldSchedule(ctx);
@@ -658,7 +700,14 @@ async function drainQueue(
 		}
 		if (busy) break;
 		if (resv?.intensity === "heavy" && next.size !== "S") break;
-		if (limits && limits.sevenDayPct >= 85) break;
+		if (limits && limits.sevenDayPct >= 85) {
+			const hrs = await getHoursUntilWeeklyReset(
+				runtimePaths.windowState,
+				runtimePaths.rateLimits,
+			);
+			const { isPastBurnPoint } = await import("./scheduler.ts");
+			if (hrs == null || !isPastBurnPoint(limits.sevenDayPct, hrs)) break;
+		}
 
 		currentTask = next;
 	}

@@ -17,6 +17,7 @@ vi.mock("node:fs/promises", async (importOriginal) => {
 		readFile: vi.fn().mockRejectedValue(new Error("ENOENT")),
 		writeFile: vi.fn().mockResolvedValue(undefined),
 		mkdir: vi.fn().mockResolvedValue(undefined),
+		stat: vi.fn().mockResolvedValue({ mtimeMs: Date.now() }),
 	};
 });
 

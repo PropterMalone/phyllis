@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
 	estimateBlockMinutes,
+	isPastBurnPoint,
 	type SchedulerContext,
 	shouldSchedule,
 } from "./scheduler.ts";
@@ -15,6 +16,7 @@ const makeContext = (
 	busyNow: false,
 	busyDuringWindow: false,
 	reservation: null,
+	hoursUntilWeeklyReset: null,
 	...overrides,
 });
 
@@ -218,5 +220,89 @@ describe("shouldSchedule", () => {
 			}),
 		);
 		expect(result.decision).toBe("weekly_budget_low");
+	});
+
+	it("overrides weekly_budget_low when past burn point", () => {
+		// 50% remaining, 4h left = 0 windows × 12% = 0%. 50% > 0% = burn point
+		const result = shouldSchedule(
+			makeContext({
+				nextTaskSize: "M",
+				rateLimits: { fiveHourPct: 0, sevenDayPct: 50 },
+				hoursUntilWeeklyReset: 4,
+			}),
+		);
+		expect(result.decision).toBe("schedule");
+	});
+
+	it("overrides window_budget_low when past burn point", () => {
+		// 60% remaining, 10h = 2 windows × 12% = 24%. 60% > 24% = burn point
+		const result = shouldSchedule(
+			makeContext({
+				nextTaskSize: "M",
+				rateLimits: { fiveHourPct: 103, sevenDayPct: 40 },
+				hoursUntilWeeklyReset: 10,
+			}),
+		);
+		expect(result.decision).toBe("schedule");
+	});
+
+	it("blocks when NOT past burn point — budget is scarce", () => {
+		// 10% remaining, 40h = 8 windows × 12% = 96%. 10% < 96% = not burn point
+		const result = shouldSchedule(
+			makeContext({
+				nextTaskSize: "M",
+				rateLimits: { fiveHourPct: 0, sevenDayPct: 90 },
+				hoursUntilWeeklyReset: 40,
+			}),
+		);
+		expect(result.decision).toBe("weekly_budget_low");
+	});
+
+	it("blocks when close to reset with low remaining budget", () => {
+		// 10% remaining, 3h = 0 windows. 10% > 0% = burn point actually
+		// But sevenDayPct=90 < WEEKLY_BUDGET_THRESHOLD=85... wait, 90 >= 85
+		// 0 windows means 0% max burn, 10% remaining > 0% = burn point = schedule
+		const result = shouldSchedule(
+			makeContext({
+				nextTaskSize: "M",
+				rateLimits: { fiveHourPct: 0, sevenDayPct: 90 },
+				hoursUntilWeeklyReset: 3,
+			}),
+		);
+		// With 0 full windows left, remaining 10% > 0% = past burn point
+		expect(result.decision).toBe("schedule");
+	});
+
+	it("blocks budget when hoursUntilWeeklyReset is unknown", () => {
+		const result = shouldSchedule(
+			makeContext({
+				nextTaskSize: "M",
+				rateLimits: { fiveHourPct: 0, sevenDayPct: 90 },
+				hoursUntilWeeklyReset: null,
+			}),
+		);
+		expect(result.decision).toBe("weekly_budget_low");
+	});
+});
+
+describe("isPastBurnPoint", () => {
+	it("returns true when remaining budget exceeds what can be burned", () => {
+		// 50% used, 4h left = 0 windows × 12% = 0%. 50% remaining > 0%
+		expect(isPastBurnPoint(50, 4)).toBe(true);
+	});
+
+	it("returns false when budget is scarce relative to remaining capacity", () => {
+		// 79% used, 40h left = 8 windows × 12% = 96%. 21% remaining < 96%
+		expect(isPastBurnPoint(79, 40)).toBe(false);
+	});
+
+	it("returns true when lots of budget but almost no time", () => {
+		// 10% used, 3h left = 0 windows. 90% remaining > 0%
+		expect(isPastBurnPoint(10, 3)).toBe(true);
+	});
+
+	it("returns false early in week with moderate usage", () => {
+		// 30% used, 100h left = 20 windows × 12% = 240%. 70% < 240%
+		expect(isPastBurnPoint(30, 100)).toBe(false);
 	});
 });
