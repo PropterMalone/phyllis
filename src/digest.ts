@@ -114,6 +114,17 @@ export function formatSubject(done: number, failed: number, now: Date): string {
 	return `Phyllis overnight — ${date}: ${parts.join(", ")}`;
 }
 
+// RFC 2047 encoded-word for non-ASCII subject headers.
+// SMTP headers must be ASCII; the em dash in our subject was rendering as
+// mojibake at receiving servers without this.
+export function encodeSubjectHeader(subject: string): string {
+	if (/^[\x20-\x7e]*$/.test(subject)) {
+		return subject;
+	}
+	const encoded = Buffer.from(subject, "utf-8").toString("base64");
+	return `=?UTF-8?B?${encoded}?=`;
+}
+
 function escapeHtml(s: string): string {
 	return s
 		.replace(/&/g, "&amp;")
@@ -464,7 +475,7 @@ export async function enrichFromLogs(
 async function sendEmail(subject: string, htmlBody: string): Promise<void> {
 	const message = [
 		`To: ${TO_EMAIL}`,
-		`Subject: ${subject}`,
+		`Subject: ${encodeSubjectHeader(subject)}`,
 		"MIME-Version: 1.0",
 		'Content-Type: text/html; charset="UTF-8"',
 		"",

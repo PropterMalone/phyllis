@@ -4,6 +4,7 @@ import {
 	collectDigestEntries,
 	computeWeeklyBudget,
 	type DigestEntry,
+	encodeSubjectHeader,
 	formatDigestHtml,
 	formatSubject,
 	lastWeeklyReset,
@@ -198,6 +199,22 @@ describe("formatSubject", () => {
 	it("handles all-failed", () => {
 		const subject = formatSubject(0, 2, NOW);
 		expect(subject).toBe("Phyllis overnight — Apr 6: 0 done, 2 failed");
+	});
+});
+
+describe("encodeSubjectHeader", () => {
+	it("RFC 2047 base64-encodes subjects with non-ASCII characters", () => {
+		const encoded = encodeSubjectHeader(
+			"Phyllis overnight — Apr 6: 5 done, 2 failed",
+		);
+		expect(encoded).toBe(
+			"=?UTF-8?B?UGh5bGxpcyBvdmVybmlnaHQg4oCUIEFwciA2OiA1IGRvbmUsIDIgZmFpbGVk?=",
+		);
+	});
+
+	it("passes through pure ASCII subjects unchanged", () => {
+		const encoded = encodeSubjectHeader("Plain ASCII subject");
+		expect(encoded).toBe("Plain ASCII subject");
 	});
 });
 
