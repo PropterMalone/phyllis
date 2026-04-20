@@ -9,6 +9,14 @@ export interface CalendarConfig {
 	calendarIds: string[];
 	created?: string;
 	calendarIdsUpdated?: string;
+	/**
+	 * Calendars consulted by checkBusy() to decide whether Karl is busy.
+	 * When omitted, falls back to the full calendarIds list — which tends
+	 * to over-block because it includes holiday/school/family calendars
+	 * that aren't "Karl is unavailable" signals. Explicitly setting this
+	 * to just the user's personal + work calendars is strongly preferred.
+	 */
+	busyCheckCalendars?: string[];
 }
 
 export interface NotifyConfig {

@@ -267,10 +267,21 @@ export async function getCalendarIds(
 	return ids;
 }
 
+export async function getBusyCheckCalendars(
+	exec: GwsExecFn = defaultExec,
+): Promise<string[]> {
+	const config = await loadConfig();
+	if (config?.busyCheckCalendars?.length) return config.busyCheckCalendars;
+	// Fallback: use the full list. This over-blocks (includes holiday, school,
+	// family, and self-tooling calendars) — set busyCheckCalendars explicitly
+	// in config.json to just personal+work calendars.
+	return getCalendarIds(exec);
+}
+
 export async function checkBusy(
 	exec: GwsExecFn = defaultExec,
 ): Promise<{ busyNow: boolean; busyDuringWindow: boolean }> {
-	const calendarIds = await getCalendarIds(exec);
+	const calendarIds = await getBusyCheckCalendars(exec);
 	const now = new Date();
 	const soon = new Date(now.getTime() + 30 * 60 * 1000); // +30min
 	const windowEnd = new Date(now.getTime() + 5 * 60 * 60 * 1000); // +5h
