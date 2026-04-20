@@ -61,39 +61,21 @@ export function isPastBurnPoint(
 export type SchedulerDecision =
 	| { decision: "schedule"; reason: string }
 	| { decision: "no_tasks"; reason: string }
-	| { decision: "window_active"; reason: string }
-	| { decision: "window_expiring_soon"; reason: string }
 	| { decision: "busy_now"; reason: string }
-	| { decision: "busy_during_window"; reason: string }
 	| { decision: "weekly_budget_low"; reason: string }
 	| { decision: "window_budget_low"; reason: string }
 	| { decision: "reserved_heavy"; reason: string };
-
-// How many minutes remaining before we consider a window "expiring soon"
-const EXPIRY_THRESHOLD_MIN = 30;
 
 export function shouldSchedule(ctx: SchedulerContext): SchedulerDecision {
 	if (ctx.nextTaskSize === null) {
 		return { decision: "no_tasks", reason: "no queued tasks" };
 	}
 
-	// If there's an active window with lots of time, don't open a new one
-	if (ctx.activeBlock?.projection) {
-		const remaining = ctx.activeBlock.projection.remainingMinutes;
-		if (remaining > EXPIRY_THRESHOLD_MIN) {
-			return {
-				decision: "window_active",
-				reason: `active window has ${remaining}min remaining`,
-			};
-		}
-		// Window expiring soon — wait for it to expire, then chain
-		return {
-			decision: "window_expiring_soon",
-			reason: `window expires in ${remaining}min — wait to chain`,
-		};
-	}
+	// Phyllis runs inside whatever 5h window is currently open (Karl's
+	// anchor script keeps one open continuously). Budget caps below bound
+	// how much we consume; we don't gate on active-ness.
 
-	// Check rate limit budgets before opening a new window
+	// Check rate limit budgets
 	if (ctx.rateLimits) {
 		const burnPoint =
 			ctx.hoursUntilWeeklyReset != null &&
@@ -133,15 +115,8 @@ export function shouldSchedule(ctx: SchedulerContext): SchedulerDecision {
 		};
 	}
 
-	if (ctx.busyDuringWindow) {
-		return {
-			decision: "busy_during_window",
-			reason: "calendar shows events in the next 5h — window would conflict",
-		};
-	}
-
 	return {
 		decision: "schedule",
-		reason: "no active window, calendar clear, budget healthy",
+		reason: "budget healthy, calendar clear for the next 30min",
 	};
 }

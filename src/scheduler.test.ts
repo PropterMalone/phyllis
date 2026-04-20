@@ -69,30 +69,15 @@ describe("shouldSchedule", () => {
 		expect(result.decision).toBe("no_tasks");
 	});
 
-	it("returns 'window_active' when a block is still active with plenty of time", () => {
+	it("schedules even while a block is active — Phyllis runs inside Karl's window", () => {
 		const result = shouldSchedule(
 			makeContext({
 				activeBlock: makeActiveBlock(),
 				nextTaskSize: "M",
+				rateLimits: { fiveHourPct: 10, sevenDayPct: 30 },
 			}),
 		);
-		expect(result.decision).toBe("window_active");
-	});
-
-	it("returns 'window_expiring_soon' when block expires soon", () => {
-		const result = shouldSchedule(
-			makeContext({
-				activeBlock: makeActiveBlock({
-					projection: {
-						totalTokens: 50000,
-						totalCost: 30,
-						remainingMinutes: 15,
-					},
-				}),
-				nextTaskSize: "S",
-			}),
-		);
-		expect(result.decision).toBe("window_expiring_soon");
+		expect(result.decision).toBe("schedule");
 	});
 
 	it("returns 'schedule' when calendar is clear and no active block", () => {
@@ -117,7 +102,9 @@ describe("shouldSchedule", () => {
 		expect(result.decision).toBe("busy_now");
 	});
 
-	it("returns 'busy_during_window' when calendar shows events in window", () => {
+	it("schedules even when calendar shows events later in the window", () => {
+		// A 45-min meeting in 2h shouldn't block 4h of runnable time — only
+		// busy_now (next 30min) defers.
 		const result = shouldSchedule(
 			makeContext({
 				nextTaskSize: "S",
@@ -125,7 +112,7 @@ describe("shouldSchedule", () => {
 				busyDuringWindow: true,
 			}),
 		);
-		expect(result.decision).toBe("busy_during_window");
+		expect(result.decision).toBe("schedule");
 	});
 
 	it("returns 'weekly_budget_low' when 7-day usage is above threshold", () => {
