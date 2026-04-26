@@ -2,10 +2,11 @@
 // Overnight digest: collect completed tasks, parse logs, render HTML email, send via gws.
 
 import { execFile } from "node:child_process";
-import { readdir, readFile } from "node:fs/promises";
+import { readdir, readFile, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { fetchBlocks } from "./ccusage.ts";
+import { isPastBurnPoint } from "./scheduler.ts";
 import type { CcusageBlock, QueuedTask } from "./types.ts";
 
 const exec = promisify(execFile);
@@ -155,8 +156,14 @@ function formatTokens(tokens: number | null): string {
 
 // --- Pure: weekly budget ---
 
+export interface RateLimitSnapshot {
+	weeklyPct: number; // 0-100, from Anthropic's anthropic-ratelimit-unified-7d header
+	weeklyResetAt: Date; // next reset (Anthropic-provided; not hardcoded — they've moved it)
+}
+
 export interface WeeklyBudget {
-	resetTime: string; // ISO 8601 — next Friday 3pm ET
+	resetTime: string; // ISO 8601 — next reset (from rate-limits.json when available)
+	resetSource: "rate-limits" | "fallback"; // where resetTime came from
 	hoursUntilReset: number;
 	hoursElapsed: number;
 	blocksSinceReset: number;
@@ -168,13 +175,20 @@ export interface WeeklyBudget {
 	sessionsAtCurrentRate: number; // estimated sessions remaining at current pace
 	dayOfWeek: number; // 0=Sun through 6=Sat — day of digest
 	healthLabel: "healthy" | "moderate" | "tight" | "critical";
-	// Burn point: when remaining weekly budget > what remaining windows can physically consume
-	// Past burn point = stop deferring, the 5h window cap is the bottleneck, not the weekly cap
+	// Burn point: weekly cap is unreachable even if every remaining 5h window
+	// were filled to its observed maximum. Past burn point = fire freely; the
+	// 5h cap is the bottleneck, not the weekly cap.
 	pastBurnPoint: boolean;
-	burnPointNote: string; // human-readable explanation
+	burnPointNote: string;
+	// Source-of-truth values used in the burn-point decision. Null if we had to
+	// fall back (no rate-limits.json) — burn-point is then null/unknown.
+	weeklyPct: number | null;
+	maxBurnPct: number; // windowsRemaining × WINDOW_WEEKLY_PCT
 }
 
-/** Find the most recent weekly reset (Friday 3pm ET = Friday 19:00 UTC) */
+/** Fallback only: most recent Friday 19:00 UTC. Used when rate-limits.json is
+ * missing — Anthropic has moved the reset point with no warning, so trust the
+ * live data over this hardcoded guess. */
 export function lastWeeklyReset(now: Date): Date {
 	const d = new Date(now);
 	d.setUTCHours(19, 0, 0, 0);
@@ -206,18 +220,37 @@ export function assessHealth(
 	return "healthy";
 }
 
+// Mirrors WINDOW_WEEKLY_PCT in scheduler.ts — kept in sync intentionally.
+// This is the *ceiling* of how much one 5h window can consume as a fraction
+// of the weekly budget, not the average. See scheduler.ts for the rationale.
+const WINDOW_WEEKLY_PCT = 22;
+
 export function computeWeeklyBudget(
 	blocks: CcusageBlock[],
 	now: Date,
+	rateLimits: RateLimitSnapshot | null = null,
 ): WeeklyBudget {
-	const reset = lastWeeklyReset(now);
-	const nextReset = new Date(reset.getTime() + 7 * 24 * 60 * 60 * 1000);
+	// Reset time: prefer Anthropic's live header (rate-limits.json). Fallback
+	// to hardcoded Friday only when rate limits are unavailable — Anthropic
+	// has moved the reset point with no warning, so the hardcoded value is
+	// often wrong.
+	let nextReset: Date;
+	let resetSource: "rate-limits" | "fallback";
+	if (rateLimits) {
+		nextReset = rateLimits.weeklyResetAt;
+		resetSource = "rate-limits";
+	} else {
+		const lastReset = lastWeeklyReset(now);
+		nextReset = new Date(lastReset.getTime() + 7 * 24 * 60 * 60 * 1000);
+		resetSource = "fallback";
+	}
+	const lastReset = new Date(nextReset.getTime() - 7 * 24 * 60 * 60 * 1000);
 	const hoursUntilReset =
 		(nextReset.getTime() - now.getTime()) / (60 * 60 * 1000);
-	const hoursElapsed = (now.getTime() - reset.getTime()) / (60 * 60 * 1000);
+	const hoursElapsed = (now.getTime() - lastReset.getTime()) / (60 * 60 * 1000);
 
 	const sinceReset = blocks.filter(
-		(b) => new Date(b.startTime) >= reset && !b.isGap,
+		(b) => new Date(b.startTime) >= lastReset && !b.isGap,
 	);
 
 	const blockCount = sinceReset.length;
@@ -227,30 +260,32 @@ export function computeWeeklyBudget(
 	const avgCostPerBlock = blockCount > 0 ? totalCost / blockCount : 0;
 	const windowsRemaining = Math.floor(hoursUntilReset / 5);
 	const daysRemaining = hoursUntilReset / 24;
-
-	// Estimated sessions remaining: windows left is the hard cap,
-	// but burn rate tells you if you'll actually use them all
 	const sessionsAtCurrentRate = Math.round(blocksPerDay * daysRemaining);
+	const maxBurnPct = windowsRemaining * WINDOW_WEEKLY_PCT;
 
-	// Burn point detection:
-	// Each window = 1 session (5h block). You can run at most `windowsRemaining` sessions.
-	// If your projected sessions at current rate <= windows remaining,
-	// you're window-limited (past burn point) — the weekly cap won't be the bottleneck.
-	// Conversely: if sessionsAtCurrentRate > windowsRemaining, you're budget-limited.
+	// Burn point: can the weekly cap still be reached if every remaining
+	// 5h window were filled to its observed maximum?
+	//   pastBurnPoint = (100 - weeklyPct) > windowsRemaining × WINDOW_WEEKLY_PCT
+	// Without rate-limits.json we don't know weeklyPct → don't claim either way.
+	const weeklyPct = rateLimits?.weeklyPct ?? null;
 	const pastBurnPoint =
-		sessionsAtCurrentRate <= windowsRemaining && blockCount > 0;
+		weeklyPct !== null && isPastBurnPoint(weeklyPct, hoursUntilReset);
+
 	let burnPointNote: string;
-	if (blockCount === 0) {
-		burnPointNote = "No sessions yet this week — burn point N/A";
+	if (weeklyPct === null) {
+		burnPointNote =
+			"no rate-limits.json. Run a session via the proxy to populate live state.";
 	} else if (pastBurnPoint) {
-		burnPointNote = `Past burn point: at ${blocksPerDay.toFixed(1)} sessions/day, you'll only use ~${sessionsAtCurrentRate} of ${windowsRemaining} available windows. Fire freely.`;
+		const remainingPct = 100 - weeklyPct;
+		burnPointNote = `${remainingPct.toFixed(0)}% of weekly budget remains, but ${windowsRemaining} windows × ${WINDOW_WEEKLY_PCT}%/window can only burn ${maxBurnPct}%. Cap is unreachable — fire freely.`;
 	} else {
-		const surplus = sessionsAtCurrentRate - windowsRemaining;
-		burnPointNote = `Budget-limited: projecting ${sessionsAtCurrentRate} sessions but only ${windowsRemaining} windows remain. ~${surplus} sessions over capacity at current pace.`;
+		const remainingPct = 100 - weeklyPct;
+		burnPointNote = `${remainingPct.toFixed(0)}% of weekly budget remains; ${windowsRemaining} windows × ${WINDOW_WEEKLY_PCT}%/window could burn up to ${maxBurnPct}%. The weekly cap is still the bottleneck.`;
 	}
 
 	return {
 		resetTime: nextReset.toISOString(),
+		resetSource,
 		hoursUntilReset,
 		hoursElapsed,
 		blocksSinceReset: blockCount,
@@ -269,6 +304,8 @@ export function computeWeeklyBudget(
 		),
 		pastBurnPoint,
 		burnPointNote,
+		weeklyPct,
+		maxBurnPct,
 	};
 }
 
@@ -310,8 +347,8 @@ function formatBudgetHtml(budget: WeeklyBudget): string {
 <table style="border-collapse:collapse;font-size:13px;width:100%">
 <tr style="border-bottom:1px solid #e0e0e0">
 <td style="padding:4px 0;color:#666">Used so far</td>
+<td style="padding:4px 12px;text-align:right">${budget.weeklyPct !== null ? `<strong>${budget.weeklyPct.toFixed(0)}%</strong> of weekly` : "—"}</td>
 <td style="padding:4px 12px;text-align:right"><strong>${budget.blocksSinceReset}</strong> sessions</td>
-<td style="padding:4px 12px;text-align:right"><strong>${formatTokens(budget.tokensSinceReset)}</strong> tokens</td>
 <td style="padding:4px 12px;text-align:right"><strong>$${budget.costSinceReset.toFixed(2)}</strong></td>
 <td style="padding:4px 0;color:#666">${daysIn}d in</td>
 </tr>
@@ -330,9 +367,29 @@ function formatBudgetHtml(budget: WeeklyBudget): string {
 <td style="padding:4px 0;color:#666">${daysLeft}d left</td>
 </tr>
 </table>
-<div style="margin-top:8px;padding:6px 10px;background:${budget.pastBurnPoint ? "#e8f5e9" : "#fff3e0"};border-radius:4px;font-size:12px">
-${budget.pastBurnPoint ? '<strong style="color:#2d7d46">Past burn point</strong>' : '<strong style="color:#e67e22">Budget-limited</strong>'} — ${escapeHtml(budget.burnPointNote)}
-</div>
+${formatBurnPointBlock(budget)}
+</div>`;
+}
+
+function formatBurnPointBlock(budget: WeeklyBudget): string {
+	let bg: string;
+	let label: string;
+	let labelColor: string;
+	if (budget.weeklyPct === null) {
+		bg = "#f0f0f0";
+		label = "Burn point unknown";
+		labelColor = "#666";
+	} else if (budget.pastBurnPoint) {
+		bg = "#e8f5e9";
+		label = "Past burn point";
+		labelColor = "#2d7d46";
+	} else {
+		bg = "#fff3e0";
+		label = "Budget-limited";
+		labelColor = "#e67e22";
+	}
+	return `<div style="margin-top:8px;padding:6px 10px;background:${bg};border-radius:4px;font-size:12px">
+<strong style="color:${labelColor}">${label}</strong> — ${escapeHtml(budget.burnPointNote)}
 </div>`;
 }
 
@@ -415,6 +472,65 @@ ${hasCostData ? `&nbsp;&middot;&nbsp; ${formatTokens(totalTokens)} tokens &nbsp;
 ${budget ? formatBudgetHtml(budget) : ""}
 </body>
 </html>`;
+}
+
+// --- Imperative: rate-limits.json reader ---
+
+// Reset times in rate-limits.json are Unix epoch seconds; in window-state.json
+// they're ISO strings. Both are written by the proxy / statusline scripts.
+// 10min staleness matches scheduler/runner — beyond that the data is unreliable.
+const RATE_LIMITS_STALENESS_MS = 10 * 60 * 1000;
+
+export async function readRateLimits(
+	windowStatePath: string,
+	rateLimitsPath: string,
+): Promise<RateLimitSnapshot | null> {
+	// Prefer proxy state (real-time, ISO timestamps)
+	try {
+		const content = await readFile(windowStatePath, "utf-8");
+		const state = JSON.parse(content) as {
+			capturedAt?: string;
+			sevenDayUtilization?: number | null;
+			sevenDayResetAt?: number | string | null;
+		};
+		if (
+			state.capturedAt &&
+			state.sevenDayUtilization != null &&
+			state.sevenDayResetAt != null
+		) {
+			const age = Date.now() - new Date(state.capturedAt).getTime();
+			if (age < RATE_LIMITS_STALENESS_MS) {
+				return {
+					weeklyPct: state.sevenDayUtilization * 100,
+					weeklyResetAt:
+						typeof state.sevenDayResetAt === "number"
+							? new Date(state.sevenDayResetAt * 1000)
+							: new Date(state.sevenDayResetAt),
+				};
+			}
+		}
+	} catch {
+		// fall through to statusline file
+	}
+
+	// Fallback: statusline rate-limits.json (epoch-second resets)
+	try {
+		const { mtimeMs } = await stat(rateLimitsPath);
+		if (Date.now() - mtimeMs > RATE_LIMITS_STALENESS_MS) return null;
+		const content = await readFile(rateLimitsPath, "utf-8");
+		const data = JSON.parse(content) as {
+			seven_day?: { used_percentage?: number; resets_at?: number };
+		};
+		const pct = data.seven_day?.used_percentage;
+		const resets = data.seven_day?.resets_at;
+		if (pct == null || resets == null) return null;
+		return {
+			weeklyPct: pct,
+			weeklyResetAt: new Date(resets * 1000),
+		};
+	} catch {
+		return null;
+	}
 }
 
 // --- Imperative: task log loading ---
@@ -501,12 +617,21 @@ async function sendEmail(subject: string, htmlBody: string): Promise<void> {
 export interface DigestOptions {
 	queuePath: string;
 	taskLogsDir: string;
+	windowStatePath: string;
+	rateLimitsPath: string;
 	dryRun: boolean;
 	cutoffHours: number;
 }
 
 export async function digest(options: DigestOptions): Promise<string> {
-	const { queuePath, taskLogsDir, dryRun, cutoffHours } = options;
+	const {
+		queuePath,
+		taskLogsDir,
+		windowStatePath,
+		rateLimitsPath,
+		dryRun,
+		cutoffHours,
+	} = options;
 
 	// Load queue
 	let tasks: QueuedTask[];
@@ -527,11 +652,14 @@ export async function digest(options: DigestOptions): Promise<string> {
 	// Count remaining queued
 	const queuedRemaining = tasks.filter((t) => t.status === "queued").length;
 
-	// Weekly budget from ccusage
+	// Weekly budget — rate-limits drive burn-point math, ccusage drives display
 	let budget: WeeklyBudget | null = null;
 	try {
-		const blocks = await fetchBlocks();
-		budget = computeWeeklyBudget(blocks, now);
+		const [blocks, rateLimits] = await Promise.all([
+			fetchBlocks(),
+			readRateLimits(windowStatePath, rateLimitsPath),
+		]);
+		budget = computeWeeklyBudget(blocks, now, rateLimits);
 	} catch {
 		// Non-fatal — send digest without budget section
 	}

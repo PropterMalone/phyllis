@@ -26,11 +26,10 @@ const makeBlock = (overrides: Partial<CcusageBlock> = {}): CcusageBlock => ({
 
 describe("buildThrottleEntry", () => {
 	it("builds entry from active block", () => {
-		const result = buildThrottleEntry(
-			[makeBlock()],
-			"karl",
-			{ fiveHourPct: 95, sevenDayPct: 79 },
-		);
+		const result = buildThrottleEntry([makeBlock()], "karl", {
+			fiveHourPct: 95,
+			sevenDayPct: 79,
+		});
 		expect(result).not.toBeNull();
 		expect(result!.matched).toBe("active");
 		expect(result!.entry.throttled).toBe(true);
@@ -82,9 +81,7 @@ describe("buildThrottleEntry", () => {
 			null,
 			"Hit 95% warning in 3cblue session",
 		);
-		expect(result!.entry.notes).toBe(
-			"Hit 95% warning in 3cblue session",
-		);
+		expect(result!.entry.notes).toBe("Hit 95% warning in 3cblue session");
 	});
 
 	it("omits rate_limits when null", () => {

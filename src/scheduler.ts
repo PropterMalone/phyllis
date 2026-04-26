@@ -40,8 +40,12 @@ export interface SchedulerContext {
 const WEEKLY_BUDGET_THRESHOLD = 85;
 // Don't schedule if window is above this threshold
 const WINDOW_BUDGET_THRESHOLD = 80;
-// Estimated per-window capacity as % of weekly budget (empirical)
-const WINDOW_WEEKLY_PCT = 12;
+// Max per-window capacity as % of weekly budget. Burn-point math needs the
+// ceiling (what a window *could* burn), not the average — using the average
+// triggers "past burn point" too eagerly. Observed range across calibration
+// data: 10.9–22.3% per window. 22 = empirical ceiling; revisit when more
+// throttle-confirmed data points land.
+const WINDOW_WEEKLY_PCT = 22;
 
 /**
  * Are we past the burn point? Remaining weekly budget exceeds what can

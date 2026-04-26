@@ -278,6 +278,7 @@ describe("formatDigestHtml", () => {
 	it("includes budget section with burn point when provided", () => {
 		const budget: WeeklyBudget = {
 			resetTime: "2026-04-10T19:00:00.000Z",
+			resetSource: "rate-limits",
 			hoursUntilReset: 103,
 			hoursElapsed: 65,
 			blocksSinceReset: 14,
@@ -291,13 +292,15 @@ describe("formatDigestHtml", () => {
 			healthLabel: "moderate",
 			pastBurnPoint: false,
 			burnPointNote:
-				"Budget-limited: projecting 22 sessions but only 20 windows remain.",
+				"Budget-limited: 35% of weekly budget remains; 20 windows × 22%/window could burn up to 440%. The weekly cap is still the bottleneck.",
+			weeklyPct: 65,
+			maxBurnPct: 440,
 		};
 		const html = formatDigestHtml([], 0, NOW, budget);
 		expect(html).toContain("Weekly Budget");
 		expect(html).toContain("14");
 		expect(html).toContain("$232.27");
-		expect(html).toContain("~20");
+		expect(html).toContain("65%");
 		expect(html).toContain("Moderate");
 		expect(html).toContain("5.2");
 		expect(html).toContain("Budget-limited");
@@ -306,6 +309,32 @@ describe("formatDigestHtml", () => {
 	it("shows past-burn-point when window-limited", () => {
 		const budget: WeeklyBudget = {
 			resetTime: "2026-04-10T19:00:00.000Z",
+			resetSource: "rate-limits",
+			hoursUntilReset: 36,
+			hoursElapsed: 132,
+			blocksSinceReset: 18,
+			tokensSinceReset: 400_000_000,
+			costSinceReset: 280.0,
+			windowsRemaining: 7,
+			avgCostPerBlock: 15.0,
+			blocksPerDay: 3.0,
+			sessionsAtCurrentRate: 4,
+			dayOfWeek: 1,
+			healthLabel: "healthy",
+			pastBurnPoint: true,
+			burnPointNote:
+				"Past burn point: 80% of weekly budget remains, but 7 windows × 22%/window can only burn 154%. Cap is unreachable — fire freely.",
+			weeklyPct: 20,
+			maxBurnPct: 154,
+		};
+		const html = formatDigestHtml([], 0, NOW, budget);
+		expect(html).toContain("Past burn point");
+	});
+
+	it("shows unknown burn-point when rate limits unavailable", () => {
+		const budget: WeeklyBudget = {
+			resetTime: "2026-04-10T19:00:00.000Z",
+			resetSource: "fallback",
 			hoursUntilReset: 103,
 			hoursElapsed: 65,
 			blocksSinceReset: 5,
@@ -317,11 +346,16 @@ describe("formatDigestHtml", () => {
 			sessionsAtCurrentRate: 8,
 			dayOfWeek: 1,
 			healthLabel: "healthy",
-			pastBurnPoint: true,
-			burnPointNote: "Past burn point: fire freely.",
+			pastBurnPoint: false,
+			burnPointNote:
+				"Burn point unknown — no rate-limits.json. Run a session via the proxy to populate live state.",
+			weeklyPct: null,
+			maxBurnPct: 440,
 		};
 		const html = formatDigestHtml([], 0, NOW, budget);
-		expect(html).toContain("Past burn point");
+		expect(html).toContain("Burn point unknown");
+		expect(html).not.toContain("Past burn point");
+		expect(html).not.toContain("Budget-limited");
 	});
 });
 
@@ -368,23 +402,25 @@ describe("lastWeeklyReset", () => {
 });
 
 describe("computeWeeklyBudget", () => {
-	it("aggregates blocks since last reset with burn point", () => {
+	it("aggregates blocks since reset, marks burn-point unknown without rate limits", () => {
+		// Without rate limits, we don't know weeklyPct → can't compute burn point.
+		// The fallback uses hardcoded Friday reset for the time window only.
 		const blocks = [
 			makeBlock({
 				startTime: "2026-04-01T00:00:00Z",
 				totalTokens: 100000,
 				costUSD: 1.0,
-			}), // before reset
+			}), // before fallback Fri reset
 			makeBlock({
 				startTime: "2026-04-04T00:00:00Z",
 				totalTokens: 200000,
 				costUSD: 2.0,
-			}), // after reset
+			}),
 			makeBlock({
 				startTime: "2026-04-05T10:00:00Z",
 				totalTokens: 300000,
 				costUSD: 3.0,
-			}), // after reset
+			}),
 		];
 		const budget = computeWeeklyBudget(
 			blocks,
@@ -392,14 +428,43 @@ describe("computeWeeklyBudget", () => {
 		);
 		expect(budget.blocksSinceReset).toBe(2);
 		expect(budget.tokensSinceReset).toBe(500000);
-		expect(budget.costSinceReset).toBeCloseTo(5.0);
-		expect(budget.hoursUntilReset).toBeCloseTo(103, 0);
-		expect(budget.windowsRemaining).toBe(20);
-		expect(budget.avgCostPerBlock).toBeCloseTo(2.5);
-		expect(budget.blocksPerDay).toBeGreaterThan(0);
-		// 2 blocks in ~2.7 days = ~0.74/day, ~3.2 projected vs 20 windows → past burn point
+		expect(budget.resetSource).toBe("fallback");
+		expect(budget.weeklyPct).toBeNull();
+		expect(budget.pastBurnPoint).toBe(false);
+		expect(budget.burnPointNote).toContain("rate-limits.json");
+	});
+
+	it("uses rate-limits reset time, not hardcoded Friday", () => {
+		// Karl's actual case Sun afternoon: reset is Mon 23:00 ET = Tue 03:00 UTC.
+		// Hardcoded Friday would compute 103h until reset; the real reset is much sooner.
+		const now = new Date("2026-04-26T15:00:00Z"); // Sun
+		const rateLimits = {
+			weeklyPct: 45,
+			weeklyResetAt: new Date("2026-04-28T03:00:00Z"), // Mon 11pm ET
+		};
+		const budget = computeWeeklyBudget([], now, rateLimits);
+		expect(budget.resetSource).toBe("rate-limits");
+		expect(budget.hoursUntilReset).toBeCloseTo(36, 0);
+		expect(budget.weeklyPct).toBe(45);
+		// 7 windows × 22% = 154% max burnable. 55% remaining < 154% → not past burn.
+		expect(budget.pastBurnPoint).toBe(false);
+		expect(budget.maxBurnPct).toBe(7 * 22);
+		expect(budget.burnPointNote).toContain("bottleneck");
+	});
+
+	it("declares past burn point when weekly cap is genuinely unreachable", () => {
+		// 36h to reset = 7 windows × 22% = 154% max burn. Past burn iff
+		// remaining > 154%, which can't happen — but with fewer windows it can.
+		// 12h to reset = 2 windows × 22% = 44% max. 80% remaining > 44% → past burn.
+		const now = new Date("2026-04-26T15:00:00Z");
+		const rateLimits = {
+			weeklyPct: 20,
+			weeklyResetAt: new Date("2026-04-27T03:00:00Z"), // 12h out
+		};
+		const budget = computeWeeklyBudget([], now, rateLimits);
 		expect(budget.pastBurnPoint).toBe(true);
-		expect(budget.burnPointNote).toContain("Past burn point");
+		expect(budget.burnPointNote).toContain("unreachable");
+		expect(budget.burnPointNote).toContain("80%");
 	});
 
 	it("excludes gap blocks", () => {

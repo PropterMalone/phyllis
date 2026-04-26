@@ -502,6 +502,8 @@ async function runDigest(parsed: ResolvedArgs): Promise<void> {
 	const result = await digest({
 		queuePath: parsed.resolvedQueuePath,
 		taskLogsDir: p.taskLogs,
+		windowStatePath: p.windowState,
+		rateLimitsPath: p.rateLimits,
 		dryRun: parsed.dryRun,
 		cutoffHours: parsed.hours ?? 18,
 	});

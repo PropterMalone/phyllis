@@ -274,13 +274,13 @@ describe("shouldSchedule", () => {
 
 describe("isPastBurnPoint", () => {
 	it("returns true when remaining budget exceeds what can be burned", () => {
-		// 50% used, 4h left = 0 windows × 12% = 0%. 50% remaining > 0%
+		// 50% used, 4h left = 0 windows × 22% = 0%. 50% remaining > 0%
 		expect(isPastBurnPoint(50, 4)).toBe(true);
 	});
 
 	it("returns false when budget is scarce relative to remaining capacity", () => {
-		// 79% used, 40h left = 8 windows × 12% = 96%. 21% remaining < 96%
-		expect(isPastBurnPoint(79, 40)).toBe(false);
+		// 60% used, 36h left = 7 windows × 22% = 154%. 40% remaining < 154%
+		expect(isPastBurnPoint(60, 36)).toBe(false);
 	});
 
 	it("returns true when lots of budget but almost no time", () => {
@@ -289,7 +289,14 @@ describe("isPastBurnPoint", () => {
 	});
 
 	it("returns false early in week with moderate usage", () => {
-		// 30% used, 100h left = 20 windows × 12% = 240%. 70% < 240%
+		// 30% used, 100h left = 20 windows × 22% = 440%. 70% < 440%
 		expect(isPastBurnPoint(30, 100)).toBe(false);
+	});
+
+	it("returns false at 36h to reset with healthy budget remaining (current scenario)", () => {
+		// 45% used (Karl's actual state Sun afternoon), 36h to reset
+		// = 7 windows × 22% = 154%. 55% remaining < 154% → not past burn point.
+		// Old WINDOW_WEEKLY_PCT=12 would give 84% max, still < 55% remaining.
+		expect(isPastBurnPoint(45, 36)).toBe(false);
 	});
 });
