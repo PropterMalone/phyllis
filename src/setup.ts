@@ -5,7 +5,7 @@ import { readdirSync } from "node:fs";
 import { copyFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
-export interface HookEntry {
+interface HookEntry {
 	event: string; // "SessionEnd" | "StopFailure"
 	command: string;
 	timeout: number;

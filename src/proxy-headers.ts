@@ -14,7 +14,7 @@ const WINDOW_SUFFIXES = [
 ] as const;
 
 /** One rate-limit window as reported by Anthropic headers */
-export interface RateLimitWindow {
+interface RateLimitWindow {
 	name: string; // "5h" | "7d" | "7d_sonnet" | dynamic
 	utilization: number; // 0.0-1.0
 	resetAt: number; // unix epoch seconds

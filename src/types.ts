@@ -85,7 +85,9 @@ export interface CalibrationEntry {
 	};
 }
 
-// User profile — context for interpreting calibration data across users
+// User profile — context for interpreting calibration data across users.
+// Reserved for multi-user calibration (calibration-log.jsonl is keyed by user_id).
+/** @public */
 export interface UserProfile {
 	user_id: string;
 	plan: "free" | "pro" | "max5" | "max20" | "team" | "enterprise";

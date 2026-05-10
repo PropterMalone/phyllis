@@ -75,7 +75,7 @@ export async function loadConfig(): Promise<CalendarConfig | null> {
 	return config.calendar;
 }
 
-export async function saveConfig(calendar: CalendarConfig): Promise<void> {
+async function saveConfig(calendar: CalendarConfig): Promise<void> {
 	const config = await loadMainConfig();
 	config.calendar = calendar;
 	await saveMainConfig(config);
@@ -128,7 +128,7 @@ export async function queryBusy(
 
 // --- Phyllis calendar CRUD ---
 
-export async function createPhyllisCalendar(
+async function createPhyllisCalendar(
 	exec: GwsExecFn = defaultExec,
 ): Promise<string> {
 	const body = {
@@ -247,7 +247,7 @@ export async function listUpcoming(
 
 // --- High-level helpers for scheduler ---
 
-export async function getCalendarIds(
+async function getCalendarIds(
 	exec: GwsExecFn = defaultExec,
 ): Promise<string[]> {
 	const config = await loadConfig();
@@ -267,7 +267,7 @@ export async function getCalendarIds(
 	return ids;
 }
 
-export async function getBusyCheckCalendars(
+async function getBusyCheckCalendars(
 	exec: GwsExecFn = defaultExec,
 ): Promise<string[]> {
 	const config = await loadConfig();

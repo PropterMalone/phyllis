@@ -15,7 +15,8 @@
 		"lint": "biome check --write .",
 		"typecheck": "tsc --noEmit",
 		"test": "vitest run",
-		"validate": "biome check . && tsc --noEmit && vitest run",
+		"lint:dead": "knip --include files,exports,types,nsExports,nsTypes && fallow dead-code",
+		"validate": "biome check . && tsc --noEmit && vitest run && npm run lint:dead",
 		"prepublishOnly": "npm run validate && npm run build"
 	},
 	"files": [
@@ -40,6 +41,8 @@
 		"@biomejs/biome": "^2.4.10",
 		"@types/node": "^25.5.0",
 		"esbuild": "0.28.0",
+		"fallow": "2.69.0",
+		"knip": "6.12.2",
 		"tsx": "^4.21.0",
 		"typescript": "^6.0.2",
 		"vitest": "^4.1.2"

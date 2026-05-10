@@ -1,0 +1,9 @@
+{
+	"$schema": "https://unpkg.com/fallow/schema.json",
+	"rules": {
+		"unused-types": "warn",
+		"duplicate-exports": "warn",
+		"unresolved-imports": "warn"
+	},
+	"ignorePatterns": ["dist/**", "node_modules/**"]
+}

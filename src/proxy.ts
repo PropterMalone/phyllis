@@ -33,7 +33,7 @@ export interface ProxyOptions {
 // Module-level state for transition detection (single-threaded, no races)
 let previousState: ProxyWindowState | null = null;
 
-export function transitionToCalibrationEntry(
+function transitionToCalibrationEntry(
 	transition: ProxyTransition,
 	state: ProxyWindowState,
 ): CalibrationEntry {

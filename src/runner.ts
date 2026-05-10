@@ -37,14 +37,14 @@ export interface RunnerOptions {
 	config: PhyllisConfig;
 }
 
-export interface WindowSnapshot {
+interface WindowSnapshot {
 	fiveHourPct: number | null;
 	sevenDayPct: number | null;
 	blockTokens: number | null;
 	blockCost: number | null;
 }
 
-export interface TaskOutcome {
+interface TaskOutcome {
 	taskId: string;
 	taskName: string;
 	success: boolean;
@@ -65,7 +65,7 @@ export interface RunnerResult {
 const PROXY_STALENESS_MS = 10 * 60 * 1000;
 
 // Scale timeout by task size — L/XL tasks (NineAngel batteries, 3CB resolution) need more time
-export const SIZE_TIMEOUT_MS: Record<TaskSize, number> = {
+const SIZE_TIMEOUT_MS: Record<TaskSize, number> = {
 	S: 15 * 60 * 1000, // 15 min
 	M: 30 * 60 * 1000, // 30 min
 	L: 60 * 60 * 1000, // 60 min

@@ -206,7 +206,7 @@ export function lastWeeklyReset(now: Date): Date {
 /** Assess budget health based on burn rate vs remaining capacity.
  * "healthy" = on pace or under for the week. "moderate" = trending high but fine.
  * "tight" = will likely run out if pace continues. "critical" = very little left. */
-export function assessHealth(
+function assessHealth(
 	blocksPerDay: number,
 	daysRemaining: number,
 	windowsRemaining: number,
@@ -481,7 +481,7 @@ ${budget ? formatBudgetHtml(budget) : ""}
 // 10min staleness matches scheduler/runner — beyond that the data is unreliable.
 const RATE_LIMITS_STALENESS_MS = 10 * 60 * 1000;
 
-export async function readRateLimits(
+async function readRateLimits(
 	windowStatePath: string,
 	rateLimitsPath: string,
 ): Promise<RateLimitSnapshot | null> {
@@ -561,7 +561,7 @@ async function loadTaskLog(
 }
 
 /** Enrich digest entries with data from task log files */
-export async function enrichFromLogs(
+async function enrichFromLogs(
 	entries: DigestEntry[],
 	taskLogsDir: string,
 ): Promise<void> {

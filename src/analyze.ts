@@ -2,7 +2,7 @@
 
 import type { CalibrationEntry } from "./types.ts";
 
-export interface HeatmapCell {
+interface HeatmapCell {
 	day: number; // 0=Sun, 6=Sat
 	hour: number; // 0-23 UTC
 	totalTokens: number;
