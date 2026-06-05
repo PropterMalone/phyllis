@@ -1,0 +1,50 @@
+{
+	"name": "phyllis",
+	"version": "0.1.0",
+	"description": "Claude Code usage optimizer — scheduling + awareness for subscription rate limits",
+	"type": "module",
+	"bin": {
+		"phyllis": "dist/cli.js"
+	},
+	"scripts": {
+		"harvest": "node --import tsx src/cli.ts harvest",
+		"snapshot": "node --import tsx src/cli.ts snapshot",
+		"analyze": "node --import tsx src/cli.ts analyze",
+		"build": "node build.js",
+		"format": "biome format --write .",
+		"lint": "biome check --write .",
+		"typecheck": "tsc --noEmit",
+		"test": "vitest run",
+		"lint:dead": "knip --include files,exports,types,nsExports,nsTypes && fallow dead-code",
+		"validate": "biome check . && tsc --noEmit && vitest run && npm run lint:dead",
+		"prepublishOnly": "npm run validate && npm run build"
+	},
+	"files": [
+		"dist/",
+		"hooks/",
+		"README.md"
+	],
+	"keywords": [
+		"claude-code",
+		"anthropic",
+		"rate-limiting",
+		"scheduler",
+		"usage-optimizer"
+	],
+	"author": "PropterMalone",
+	"license": "ISC",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/PropterMalone/phyllis.git"
+	},
+	"devDependencies": {
+		"@biomejs/biome": "^2.4.10",
+		"@types/node": "^25.5.0",
+		"esbuild": "0.28.0",
+		"fallow": "2.69.0",
+		"knip": "6.12.2",
+		"tsx": "^4.21.0",
+		"typescript": "^6.0.2",
+		"vitest": "^4.1.2"
+	}
+}

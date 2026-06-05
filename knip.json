@@ -1,0 +1,6 @@
+{
+	"$schema": "https://unpkg.com/knip@6/schema.json",
+	"entry": ["src/*.test.ts"],
+	"project": ["src/**/*.ts"],
+	"ignoreBinaries": ["ccusage", "gws"]
+}
