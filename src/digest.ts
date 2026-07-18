@@ -11,8 +11,6 @@ import type { CcusageBlock, QueuedTask } from "./types.ts";
 
 const exec = promisify(execFile);
 
-const TO_EMAIL = "user@example.com";
-
 // --- Pure: task log parsing ---
 
 export interface ParsedTaskLog {
@@ -624,9 +622,13 @@ async function enrichFromLogs(
 
 // --- Imperative: email ---
 
-async function sendEmail(subject: string, htmlBody: string): Promise<void> {
+async function sendEmail(
+	subject: string,
+	htmlBody: string,
+	toEmail: string,
+): Promise<void> {
 	const message = [
-		`To: ${TO_EMAIL}`,
+		`To: ${toEmail}`,
 		`Subject: ${encodeSubjectHeader(subject)}`,
 		"MIME-Version: 1.0",
 		'Content-Type: text/html; charset="UTF-8"',
@@ -657,6 +659,8 @@ export interface DigestOptions {
 	rateLimitsPath: string;
 	dryRun: boolean;
 	cutoffHours: number;
+	/** Recipient address. Required unless dryRun. */
+	toEmail: string | null;
 }
 
 export async function digest(options: DigestOptions): Promise<string> {
@@ -667,6 +671,7 @@ export async function digest(options: DigestOptions): Promise<string> {
 		rateLimitsPath,
 		dryRun,
 		cutoffHours,
+		toEmail,
 	} = options;
 
 	// Load queue
@@ -711,6 +716,12 @@ export async function digest(options: DigestOptions): Promise<string> {
 		return html;
 	}
 
-	await sendEmail(subject, html);
+	if (!toEmail) {
+		throw new Error(
+			"No digest recipient configured. Set digestEmail in ~/.phyllis/config.json or the PHYLLIS_DIGEST_EMAIL env var.",
+		);
+	}
+
+	await sendEmail(subject, html, toEmail);
 	return subject;
 }

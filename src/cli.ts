@@ -532,6 +532,7 @@ async function runDigest(parsed: ResolvedArgs): Promise<void> {
 		rateLimitsPath: p.rateLimits,
 		dryRun: parsed.dryRun,
 		cutoffHours: parsed.hours ?? 18,
+		toEmail: parsed.config.digestEmail,
 	});
 
 	if (parsed.dryRun) {

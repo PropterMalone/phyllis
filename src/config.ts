@@ -39,6 +39,8 @@ export interface PhyllisConfig {
 		reservationsPath: string;
 	} | null;
 	notify: NotifyConfig | null;
+	/** Recipient for the overnight digest email. Env: PHYLLIS_DIGEST_EMAIL. Kept out of source — set in ~/.phyllis/config.json or env. */
+	digestEmail: string | null;
 }
 
 /** Resolve the Phyllis home directory: PHYLLIS_HOME env → ~/.phyllis */
@@ -64,6 +66,7 @@ export function defaultConfig(home?: string): PhyllisConfig {
 			? { reservationsPath: join(userHome, ".docket", "reservations.json") }
 			: null,
 		notify: null,
+		digestEmail: process.env.PHYLLIS_DIGEST_EMAIL ?? null,
 	};
 }
 
@@ -114,6 +117,10 @@ export function mergeConfig(
 			stored.calendar !== undefined ? stored.calendar : defaults.calendar,
 		docket: stored.docket !== undefined ? stored.docket : defaults.docket,
 		notify: stored.notify !== undefined ? stored.notify : defaults.notify,
+		digestEmail:
+			stored.digestEmail !== undefined
+				? stored.digestEmail
+				: defaults.digestEmail,
 	};
 }
 

@@ -9,6 +9,8 @@ import {
 	type ServerResponse,
 } from "node:http";
 import { request as httpsRequest } from "node:https";
+import { isIP, type LookupFunction } from "node:net";
+import { createCachedLookup, type LookupFn } from "./cached-lookup.ts";
 import {
 	buildLiveState,
 	detectTransitions,
@@ -19,6 +21,10 @@ import {
 import type { CalibrationEntry } from "./types.ts";
 
 const DEFAULT_UPSTREAM_HOST = "api.anthropic.com";
+
+// Shared cached resolver: survives transient host-resolver EAI_AGAIN blips by
+// reusing the last-good upstream IP instead of 502'ing. See cached-lookup.ts.
+const cachedLookup: LookupFn = createCachedLookup();
 
 export interface ProxyOptions {
 	port: number;
@@ -225,6 +231,10 @@ function handleRequest(
 			path: url,
 			method,
 			headers: upstreamHeaders,
+			// Cached, blip-tolerant resolution (no-op for IP-literal hosts).
+			// Cast: Node unions the all/non-all callback shapes into LookupFunction;
+			// cachedLookup handles both at runtime.
+			lookup: cachedLookup as unknown as LookupFunction,
 		},
 		(upstreamRes) => {
 			const parsed = parseRateLimitHeaders(
@@ -299,6 +309,17 @@ export function startProxy(
 	server.listen(port, "127.0.0.1", () => {
 		console.error(`[phyllis-proxy] listening on http://127.0.0.1:${port}`);
 		console.error(`[phyllis-proxy] state file: ${statePath}`);
+		// Pre-warm the resolver cache (matching the all:true shape real requests
+		// use on Node ≥20's autoSelectFamily) so the first request already has a
+		// last-good result to fall back on if the host resolver is mid-blip.
+		if (isIP(_upstreamHost) === 0) {
+			cachedLookup(_upstreamHost, { all: true }, (err) => {
+				if (err)
+					console.error(
+						`[phyllis-proxy] DNS pre-warm failed: ${(err as Error).message}`,
+					);
+			});
+		}
 	});
 
 	const shutdown = () => {
